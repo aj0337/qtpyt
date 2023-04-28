@@ -77,7 +77,7 @@ requires = {
     "python_requires": ">= " + "3.7",
     "install_requires": [
         "setuptools",
-        "numpy >= " + "1.21" + " < 1.22",
+        "numpy >= " + "1.21" + ",<1.22",
         "scipy",
         "numba >= " + "0.55",
         "ase",
