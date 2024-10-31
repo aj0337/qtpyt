@@ -148,41 +148,35 @@ class Basis:
         return Basis(atoms, nao_a)
 
     def argsort(self, order="xyz"):
-        """Sort basis indices using corresponding atomic positions.
+        """Sorts basis indices using corresponding atomic positions based on the given order.
 
-        The first character is used as primary coordinate and so on.
-        NOTE : Opposite to np.lexsort
+        Args:
+            order (str): Coordinate order for sorting (e.g., "xyz").
 
-        Example:
-        In [2]: basis.nao_a
-        Out[2]: array([2, 1, 2, 1])
+        Returns:
+            np.ndarray: Sorted indices based on specified order.
 
-        In [38]: basis.atoms.positions
-        Out[38]:
-        array([[0. , 0. , 0. ],
-            [0.5, 0.5, 0.5],
-            [0. , 1. , 0. ],
-            [0.5, 1.5, 0.5]])
-
-        In [39]: basis.atoms.positions[basis.argsort()]
-        Out[39]:
-        array([[0. , 0. , 0. ],
-            [0. , 1. , 0. ],
-            [0.5, 0.5, 0.5],
-            [0.5, 1.5, 0.5]])
-
-        In [41]: basis.nao_a[basis.argsort()]
-        Out[41]: array([2, 2, 1, 1])
+        Logic:
+            - Uses the `argsort` function to lexicographically order atoms based on specified coordinates.
 
         """
         return argsort(self.atoms.positions, order)
 
     def get_indices(self, indices=None):
-        """Get basis function indices.
+        """Gets basis function indices for a subset of atoms.
 
         Args:
-            indices : (optional) take subset/sorted atomic indices.
+            indices (int or list of int, optional): Atomic indices for which to retrieve basis functions. Defaults to all.
+
+        Returns:
+            np.ndarray: Basis function indices for the specified subset.
+
+        Logic:
+            - If `indices` is None, uses all atoms; if integer, returns a single atom’s basis functions; otherwise, uses subset.
+            - The `_expand` method is applied to expand cumulative orbital indices (`M_a`) based on `nao_a`.
+
         """
+
         if indices is None:
             M_a, nao_a, nao = self.M_a, self.nao_a, self.nao
         elif isinstance(indices, numbers.Integral):
@@ -202,11 +196,18 @@ class Basis:
         return idx
 
     def take(self, basis_dict):
-        """Take basis function indices for subset of elements' kind.
+        """Gets indices for a subset of basis functions based on atomic element types.
 
         Args:
-            basis_dict : dictionary of element keys and indices value(s).
-                { 'O' : [3, .. ], ..  'C' : 2, .. }
+            basis_dict (dict): Dictionary mapping atomic symbols to list of basis indices.
+
+        Returns:
+            np.ndarray: Sorted indices for the specified basis functions.
+
+        Logic:
+            - Maps atomic symbols in `basis_dict` to atom indices using the basis indices for each symbol.
+            - The indices are sorted before returning.
+
         """
         idxlist = []
         for kind, idx in basis_dict.items():
@@ -220,18 +221,58 @@ class Basis:
         return idxlist
 
     def extract(self):
-        """Extract a subset of the atoms starting from zero index."""
+        """Extracts a subset of atoms and basis functions starting from zero index.
+
+        Returns:
+            Basis: A new Basis object with the subset.
+
+        Logic:
+            - Returns a new instance of Basis, retaining only the starting subset.
+
+        """
         return self.__class__(self.atoms, self.nao_a)
 
     def __getitem__(self, i):
-        """Return a subset of the atoms."""
+        """Accesses a subset of atoms and corresponding basis functions.
+
+        Args:
+            i (int): Index for the subset.
+
+        Returns:
+            Basis: Subset of atoms and basis functions.
+
+        Logic:
+            - Accesses the indexed subset by slicing `atoms`, `nao_a`, and `M_a`.
+
+        """
         return self.__class__(self.atoms[i], self.nao_a[i], self.M_a[i])
 
     def __len__(self):
+        """Gets the total number of basis functions.
+
+        Returns:
+            int: Total number of basis functions.
+
+        Logic:
+            - Simply returns the attribute `nao`, calculated during initialization.
+
+        """
         return self.nao
 
     def _expand(self, array, repeats=None):
-        """Helper function. Expand atoms array to basis functions."""
+        """Expands an atomic property array to the size of the basis functions.
+
+        Args:
+            array (np.ndarray): Array of atomic properties.
+            repeats (np.ndarray, optional): Number of repetitions for each atom, defaults to `nao_a`.
+
+        Returns:
+            np.ndarray: Expanded array.
+
+        Logic:
+            - Uses `np.repeat` to duplicate each element in `array` according to `repeats`, matching the total number of basis functions.
+
+        """
         if repeats is None:
             repeats = self.nao_a
         return np.repeat(array, repeats, axis=0)
