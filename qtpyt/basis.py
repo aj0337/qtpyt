@@ -2,14 +2,29 @@ import numbers
 
 import ase.neighborlist
 import numpy as np
+
 #### NeighborList
 from ase.data import covalent_radii
 from ase.neighborlist import NeighborList
 
 
 def get_neighbors(atoms):
-    """Get neighbors list for each atom.
-    
+    """Get a list of neighboring atoms for each atom in the given structure based on covalent radii.
+
+    The covalent radii are used to define an effective bonding distance within which neighboring atoms
+    are identified. The `NeighborList` class from ASE is employed here to create and manage these lists.
+
+    Args:
+        atoms (ase.Atoms): The atomic structure containing atomic positions and types.
+
+    Returns:
+        list[list[int]]: A list of lists where each inner list contains the indices of neighboring atoms for each atom.
+
+    Logic:
+        - Retrieve covalent radii for each atom type to define neighbor distances.
+        - Use the `NeighborList` object to calculate neighbors within these distances.
+        - For each atom, `nl.get_neighbors` provides the list of neighboring atom indices, which are stored in `nlists`.
+
     """
     cov_radii = [covalent_radii[a.number] for a in atoms]
     nl = NeighborList(cov_radii, bothways=True, self_interaction=False)
@@ -23,26 +38,56 @@ def get_neighbors(atoms):
 
 
 def argsort(positions, order="xyz"):
+    """Sorts indices of atoms based on their positions in a specific coordinate order.
+
+    This function lexicographically sorts atom positions, i.e., ordering atoms by x, then y, then z.
+    The primary, secondary, and tertiary sorting coordinates are determined by the `order` argument.
+
+    Args:
+        positions (np.ndarray): 2D array with atomic positions as rows.
+        order (str): Specifies sorting order by axes, e.g., "xyz" to sort by x first, then y, then z.
+
+    Returns:
+        np.ndarray: Sorted indices for atomic positions based on the specified order.
+
+    Logic:
+        - Use numpy's `lexsort` for multi-key sorting.
+        - `order` determines the primary, secondary, and tertiary axes for sorting by converting each axis into its corresponding index.
+
+    """
     i, j, k = ["xyz".index(i) for i in order]
     idx = np.lexsort((positions[:, k], positions[:, j], positions[:, i]))
     return idx
 
 
 class Basis:
-    """Basis function descriptor.
-    
-    Example :
-    In [1]: from ase import Atoms
-    In [2]: from qtpyt.surface.basis import Basis
-    In [2]: 
-    In [2]: atoms = Atoms('OH',positions=[[0,0,0],[0.5,0.5,0.5]],cell=[1,1,1])
-    In [3]: basis = Basis.from_dictionary(atoms, {'O':2,'H':1})
-        
+    """Represents a basis function descriptor for atomic orbitals in a structure.
+
+    This class stores and manages information about atomic basis functions for a system.
+    It is designed to track the number of atomic orbitals (basis functions) per atom,
+    and provide methods to manipulate and query this data.
+
+    Attributes:
+        atoms (ase.Atoms): The atomic structure object.
+        nao_a (np.ndarray): Number of atomic orbitals per atom (basis functions).
+        M_a (np.ndarray): Cumulative orbital indices per atom, starting with zero.
+        nao (int): Total number of atomic orbitals in the system.
+
     """
 
     def __init__(self, atoms, nao_a, M_a=None):
-        """Build descriptor from atoms and # of atomic orbitals
-        per atom nao.
+        """Initializes the Basis object with atomic orbitals for each atom.
+
+        Args:
+            atoms (ase.Atoms): The atomic structure object.
+            nao_a (np.ndarray): The number of atomic orbitals per atom.
+            M_a (np.ndarray, optional): Cumulative orbital indices for atoms. Defaults to None, where it will be calculated.
+
+        Logic:
+            - `nao_a` is a list of orbital counts per atom.
+            - `M_a` provides the cumulative count of orbitals up to each atom.
+            - The total number of atomic orbitals (`nao`) is calculated as the sum of `nao_a`.
+            - If `M_a` is not provided, it is initialized as the cumulative sum of `nao_a` with a zero start.
 
         """
         self.atoms = atoms
@@ -54,8 +99,18 @@ class Basis:
 
     @classmethod
     def from_dictionary(cls, atoms, basis):
-        """Build descriptor from atoms and dictionary of key value
-        paris {symbol : nao}.
+        """Constructs a Basis object from an atoms object and a dictionary.
+
+        Args:
+            atoms (ase.Atoms): The atomic structure object.
+            basis (dict): Dictionary mapping atomic symbols to the number of atomic orbitals per atom.
+
+        Returns:
+            Basis: Initialized Basis object.
+
+        Logic:
+            - The method converts a dictionary mapping atomic symbols to basis functions into a list of orbital counts per atom.
+            - This is passed to initialize a `Basis` object using `nao_a` from the basis dictionary.
 
         """
         nao_a = [basis[symbol] for symbol in atoms.symbols]
@@ -63,37 +118,29 @@ class Basis:
 
     @property
     def centers(self):
-        """Expand atomic centers to basis functions.
-        
-        Example:
-        In [1]: basis.atoms.positions
-        Out[1]: 
-        array([[0. , 0. , 0. ],
-            [0.5, 0.5, 0.5]])
+        """Expands atomic positions to correspond with the number of basis functions.
 
-        In [2]:
-        In [2]: basis.centers
-        Out[2]: 
-        array([[0. , 0. , 0. ],
-            [0. , 0. , 0. ],
-            [0.5, 0.5, 0.5]])
+        Returns:
+            np.ndarray: Array of atomic positions, repeated to match the number of basis functions per atom.
 
+        Logic:
+            - Each atomic position is repeated by the number of orbitals for that atom (`nao_a`).
+            - The helper function `_expand` handles the repetition.
 
         """
         return self._expand(self.atoms.positions)
 
     def repeat(self, N):
-        """Create a new repeated basis object.
+        """Creates a repeated basis object over the specified periodicity.
 
         Args:
-            N : sequence of three positives.
+            N (tuple of int): Pattern for repeating the atomic structure along each axis.
 
-        Example:
-        In [1]: basis.nao_a
-        Out[1]: array([2, 1])
+        Returns:
+            Basis: New Basis object with repeated atomic and orbital information.
 
-        In [2]: basis.repeat((1,2,1)).nao_a
-        Out[2]: array([2, 1, 2, 1])
+        Logic:
+            - Repeats the orbital counts and atomic positions using `nao_a` and `atoms.repeat(N)`.
 
         """
         nao_a = np.tile(self.nao_a, np.prod(N))
@@ -102,7 +149,7 @@ class Basis:
 
     def argsort(self, order="xyz"):
         """Sort basis indices using corresponding atomic positions.
-        
+
         The first character is used as primary coordinate and so on.
         NOTE : Opposite to np.lexsort
 
@@ -111,14 +158,14 @@ class Basis:
         Out[2]: array([2, 1, 2, 1])
 
         In [38]: basis.atoms.positions
-        Out[38]: 
+        Out[38]:
         array([[0. , 0. , 0. ],
             [0.5, 0.5, 0.5],
             [0. , 1. , 0. ],
             [0.5, 1.5, 0.5]])
 
         In [39]: basis.atoms.positions[basis.argsort()]
-        Out[39]: 
+        Out[39]:
         array([[0. , 0. , 0. ],
             [0. , 1. , 0. ],
             [0.5, 0.5, 0.5],
@@ -132,7 +179,7 @@ class Basis:
 
     def get_indices(self, indices=None):
         """Get basis function indices.
-        
+
         Args:
             indices : (optional) take subset/sorted atomic indices.
         """
@@ -156,10 +203,10 @@ class Basis:
 
     def take(self, basis_dict):
         """Take basis function indices for subset of elements' kind.
-        
+
         Args:
-            basis_dict : dictionary of element keys and indices value(s). 
-                { 'O' : [3, .. ], ..  'C' : 2, .. }    
+            basis_dict : dictionary of element keys and indices value(s).
+                { 'O' : [3, .. ], ..  'C' : 2, .. }
         """
         idxlist = []
         for kind, idx in basis_dict.items():
