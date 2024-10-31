@@ -39,15 +39,15 @@ def remove_pbc(basis, A_kMM, direction="x", eps=-1e-3):
 
 def map_B2A(pos_A, pos_B):
     """Find indices on `B` in `A`.
-    
+
     Example:
           ----            ----
          |   d|          |   d|
-    A=   |c   | ,   B=   |b   | 
+    A=   |c   | ,   B=   |b   |
          |   b|          |   c|
-         |a   |          |a   | 
+         |a   |          |a   |
           ----            ----
-    
+
     A = B[map_B2A(A, B)]
     """
     B2A = cdist(pos_A, pos_B, metric="cityblock").argmin(1)
@@ -75,13 +75,35 @@ def order_indices(basis, N, order="xyz", positions=None):
 def prepare_leads_matrices(
     H_kMM, S_kMM, size, offset=(0.0, 0.0, 0.0), direction="x", align=None
 ):
-    """Prepare input matrices for PrincipalLayer.
-    
+    """Prepare Hamiltonian and overlap matrices for the leads in a transport calculation.
+
+    This function prepares the Hamiltonian (H) and overlap (S) matrices in the required format for calculating
+    self-energies for the lead regions in quantum transport models. It calculates both the lead and coupling
+    matrices for each k-point using Bloch summation methods.
+
     Args:
-        basis : basis function descriptor.
-        H_kMM : Hamiltonian matrices in k-space.
-        S_kMM : Overlap matrices in k-space.
-        size, offset : Monkhorst-Pack used to sample Brillouin Zone.
+        H_kMM (np.ndarray): Hamiltonian matrices in k-space.
+        S_kMM (np.ndarray): Overlap matrices in k-space.
+        size (tuple of int): Monkhorst-Pack grid size for k-point sampling.
+        offset (tuple of float, optional): Monkhorst-Pack grid offset. Defaults to (0.0, 0.0, 0.0).
+        direction (str, optional): Transport direction ('x', 'y', or 'z'). Defaults to 'x'.
+        align (tuple, optional): Basis index and value to align surface energies, used to match central region.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            - kpts_t: k-points transverse to transport direction.
+            - H_kii: Lead Hamiltonian matrix.
+            - S_kii: Lead overlap matrix.
+            - H_kij: Coupling Hamiltonian matrix.
+            - S_kij: Coupling overlap matrix.
+
+    Logic:
+        - The function first generates the k-points for the Monkhorst-Pack grid (`kpts`).
+        - If the grid exceeds the provided matrix size, it applies inversion symmetry reduction.
+        - Partial Bloch summations for the Hamiltonian and overlap matrices are then calculated.
+        - If the `align` parameter is given, the function adjusts (aligns) the matrices to the central scattering
+          region.
+
     """
 
     kpts = monkhorst_pack(size, offset)
@@ -113,7 +135,7 @@ def prepare_central_matrices(
     basis, H_kMM, S_kMM, size, offset=(0.0, 0.0, 0.0), direction="x"
 ):
     """Prepare input matrices for PrincipalLayer.
-    
+
     Args:
         basis : basis function descriptor.
         H_kMM : Hamiltonian matrices in k-space.
@@ -142,7 +164,7 @@ def align_orbitals(
     align: Tuple[int, Union[float, complex]],
 ):
     """Align surface energies with a central scattering region.
-    
+
     Args:
         kpts : np.ndarray, ndim = 2
             K-points of surface matrices.
