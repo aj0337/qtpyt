@@ -3,11 +3,7 @@ from functools import singledispatch
 import numpy as np
 import scipy.linalg as la
 
-# Physical quantities
-from scipy.constants import e, k
-
-from qtpyt.base._kernels import dagger, dotdiag, dottrace
-from qtpyt.base.greenfunction import GreenFunction as GF
+from qtpyt.base._kernels import dotdiag
 from qtpyt.basis import Basis
 from qtpyt.block_tridiag.greenfunction import GreenFunction as BTGF
 
@@ -18,7 +14,7 @@ http://www1.spms.ntu.edu.sg/~ydchong/teaching/08_contour_integration.pdf
 
 
 def zero_fermi(nzp):
-    """Compute poles (zp) and residues (Rp) of fermi function."""
+    """Compute poles (zp) and residues (Rp) of Fermi function."""
     N = nzp
     M = 2 * N
 
@@ -68,13 +64,10 @@ def zero_fermi(nzp):
 
 
 @singledispatch
-def _integrate(G, mu=0, T=300, nzp=100, R=1e10):
-
+def _integrate(G, mu=0, beta=38.68, nzp=100, R=1e10):
     zp, Rp = zero_fermi(nzp)
     N = nzp
 
-    k_B = k / e  # Boltzmann constant [eV/K] 8.6173303e-05
-    beta = 1 / (k_B * T)
     a_p = mu + 1j * zp / beta
 
     eta = G.eta
@@ -96,13 +89,10 @@ def _integrate(G, mu=0, T=300, nzp=100, R=1e10):
 
 
 @_integrate.register(BTGF)
-def _(G, mu=0, T=300, nzp=100, R=1e10):
-
+def _(G, mu=0, beta=38.68, nzp=100, R=1e10):
     zp, Rp = zero_fermi(nzp)
     N = nzp
 
-    k_B = k / e  # Boltzmann constant [eV/K] 8.6173303e-05
-    beta = 1 / (k_B * T)
     a_p = mu + 1j * zp / beta
 
     eta = G.eta
@@ -111,7 +101,7 @@ def _(G, mu=0, T=300, nzp=100, R=1e10):
     R = 1e10
     mu_0 = 1j * R * G.retarded(1j * R).dotdiag(G.S)
 
-    mu_1 = complex(0)  # np.zeros(len(mu_0),complex)
+    mu_1 = complex(0)
     for i in range(N):
         mu_1 += G.retarded(a_p[i]).dotdiag(G.S) * Rp[i]
     mu_1 *= -1j * 4 / beta
@@ -123,17 +113,17 @@ def _(G, mu=0, T=300, nzp=100, R=1e10):
     return rho
 
 
-def get_ao_charge(G, mu=0, T=300, nzp=100, R=1e10):
+def get_ao_charge(G, mu=0, beta=38.68, nzp=100, R=1e10):
     """Get orbital charge density."""
-    return _integrate(G, mu, T, nzp, R)
+    return _integrate(G, mu, beta, nzp, R)
 
 
-def get_atomic_charge(basis: Basis, G, mu=0, T=300, nzp=100, R=1e10):
+def get_atomic_charge(basis: Basis, G, mu=0, beta=38.68, nzp=100, R=1e10):
     """Get atomic charge density."""
-    rho = _integrate(G, mu, T, nzp, R)
+    rho = _integrate(G, mu, beta, nzp, R)
     return basis.sum_aos_atoms(rho)
 
 
-def get_total_charge(G, mu=0, T=300, nzp=100, R=1e10):
+def get_total_charge(G, mu=0, beta=38.68, nzp=100, R=1e10):
     """Get total charge density."""
-    return _integrate(G, mu, T, nzp, R).sum()
+    return _integrate(G, mu, beta, nzp, R).sum()
