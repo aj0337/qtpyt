@@ -10,7 +10,7 @@ from qtpyt.block_tridiag.btmatrix import BTMatrix, empty_buffer
 
 class GreenFunction(BaseGreenFunction):
     """Block Tridiagonal Green's Function.
-    
+
     Allows to compute observables for a scattering region
     embedded in an environment described by selfenergies.
     The Hamiltonian and the Overlap are given as two lists
@@ -18,13 +18,13 @@ class GreenFunction(BaseGreenFunction):
 
     Args:
         hs_list_ii : (list(xp.ndarray(complex, shape=(2,m,m))), len=N)
-            List of block matrices on the diagonal. 
+            List of block matrices on the diagonal.
 
                 hs_list_ii[i][0] = Hamilton-block[0,0]
                 hs_list_ii[i][1] = Overlap-block[0,0]
-            
+
         hs_list_ii : (list(xp.ndarray(complex, shape=(2,m,m))), len=N-1)
-            List of block matrices on the upper diagonal. 
+            List of block matrices on the upper diagonal.
 
                 hs_list_ij[i][0] = Hamilton-block[0,1]
                 hs_list_ij[i][1] = Overlap-block[0,1]
@@ -35,7 +35,7 @@ class GreenFunction(BaseGreenFunction):
                 Hamiltonian[block, block][indices] << selfenergy
 
         solver : ('str')
-            One of the solvers available in Solver given as string. 
+            One of the solvers available in Solver given as string.
             Used to compute selected parts of the Green's function.
             (i.e. invert the matrix.)
 
@@ -52,7 +52,6 @@ class GreenFunction(BaseGreenFunction):
         kt=0.0,
         solver="spectral",
     ):
-
         Solver = solvers.__dict__.get(solver.capitalize(), None)
         if Solver is None:
             raise RuntimeError(f"Invalid solver {solver}")
@@ -114,8 +113,8 @@ class GreenFunction(BaseGreenFunction):
 
         return self.Ginv
 
-    def get_transmission(self, energy):
-        return self.solver.get_transmission(energy)
+    def get_transmission(self, energy, ferretti=True):
+        return self.solver.get_transmission(energy, ferretti)
 
     def get_spectrals(self, energy):
         return self.solver.get_spectrals(energy)

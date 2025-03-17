@@ -34,7 +34,7 @@ class Solver:
     def inv(self, Ginv, *args, **kwargs):
         return self.method(Ginv.m_qii, Ginv.m_qij, Ginv.m_qji, *args, **kwargs)
 
-    def get_transmission(self, energy):
+    def get_transmission(self, energy, *args, **kwargs):
         raise NotImplementedError(
             "{self.__class__.__name__} does not implement transmission."
         )
@@ -116,16 +116,60 @@ class Dyson(Solver):
                 self.G = BTMatrix(*G)
         return self.G
 
-    def get_transmission(self, energy):
+    # def get_transmission(self, energy):
+    #     _ = self.get_retarded(energy)
+    #     gamma_L = self.gf.gammas[0]
+    #     gamma_R = self.gf.gammas[1]
+    #     T_e = xp.einsum(
+    #         "ij,jk,kl,lm->im",
+    #         gamma_L,
+    #         self.g_1N,
+    #         gamma_R,
+    #         dagger(self.g_1N),
+    #         optimize=True,
+    #     ).real.trace()
+    #     return T_e
+
+    def get_transmission(self, energy, ferretti):
         _ = self.get_retarded(energy)
         gamma_L = self.gf.gammas[0]
         gamma_R = self.gf.gammas[1]
+
+        if (len(self.gf.idxleads) == len(self.gf.selfenergies)) or (not (ferretti)):
+            print("No Ferretti correction")
+            T_e = xp.einsum(
+                "ij,jk,kl,lm->im",
+                gamma_L,
+                self.g_1N,
+                gamma_R,
+                dagger(self.g_1N),
+                optimize=True,
+            ).real.trace()
+            return T_e
+
+        # Ferretti correction
+        print("Ferretti correction")
+        delta = xp.zeros_like(self.gf.get_Ginv(energy), dtype=complex)
+        for i, (indices, selfenergy) in enumerate(self.gf.selfenergies):
+            if i not in self.gf.idxleads:
+                sigma = selfenergy.retarded(energy)
+                delta[indices] += 1.0j * (sigma - sigma.T.conj())
+
+        # Solve for delta using the same system:
+        delta[:] = xp.linalg.solve(
+            gamma_L + gamma_R + 2 * self.gf.eta * self.gf.S, delta
+        )
+        delta.flat[:: len(delta) + 1] += 1.0
+
+        # Compute transmission using delta correction
         T_e = xp.einsum(
-            "ij,jk,kl,lm->im",
+            "ij,jk,kl,lm,mn->in",
             gamma_L,
             self.g_1N,
             gamma_R,
+            delta,
             dagger(self.g_1N),
             optimize=True,
         ).real.trace()
+
         return T_e
