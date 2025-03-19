@@ -1,5 +1,5 @@
 from qtpyt import xp
-from qtpyt.base._kernels import dagger
+from qtpyt.base._kernels import dagger, get_lambda
 from qtpyt.block_tridiag.btmatrix import BTMatrix
 
 # from qtpyt.block_tridiag.greenfunction import GreenFunction
@@ -149,12 +149,16 @@ class Dyson(Solver):
 
         # Ferretti correction
         print("Ferretti correction")
-        delta = xp.zeros_like(self.gf.get_Ginv(energy), dtype=complex)
         for i, (indices, selfenergy) in enumerate(self.gf.selfenergies):
             if i not in self.gf.idxleads:
                 sigma = selfenergy.retarded(energy)
-                delta[indices] += 1.0j * (sigma - sigma.T.conj())
-
+                delta = xp.zeros_like(sigma, dtype=complex)
+                delta += get_lambda(sigma)
+        print(f"delta shape: {delta.shape}")
+        print(f"gamma_L shape: {gamma_L.shape}")
+        print(f"gamma_R shape: {gamma_R.shape}")
+        print(f"self.gf.S shape: {self.gf.S.shape}")
+        print(f"self.g_1N shape: {self.g_1N.shape}")
         # Solve for delta using the same system:
         delta[:] = xp.linalg.solve(
             gamma_L + gamma_R + 2 * self.gf.eta * self.gf.S, delta

@@ -143,7 +143,7 @@ class GreenFunction(BaseGreenFunction):
     def get_transmission(self, energy, ferretti=True):
         """Get the transmission coeffiecient."""
         if (len(self.idxleads) == len(self.selfenergies)) or (not (ferretti)):
-            print("Using the standard transmission formula.")
+            print("No Ferretti correction.")
             a_mm = self.retarded(energy).dot(self.gammas[0])  # updates gammas
             b_mm = self.advanced(energy).dot(self.gammas[1])
             return dottrace(a_mm, b_mm).real
@@ -151,9 +151,17 @@ class GreenFunction(BaseGreenFunction):
         print("Using the Ferretti correction.")
         # Ferretti : https://journals.aps.org/prb/pdf/10.1103/PhysRevB.72.125114
         delta = xp.zeros(self.shape, complex)
+        G_r = self.retarded(energy)  # required for populating gammas
+        G_a = self.advanced(energy)
         for i, (indices, selfenergy) in enumerate(self.selfenergies):
             if i not in self.idxleads:
+                print(f"i:{i} not in idxleads")
+                print(f"indices: {indices}")
+                print(f"delta[indices] shape: {delta[indices].shape}")
                 sigma = selfenergy.retarded(energy)
+                print(
+                    f"(sigma - sigma.T.conj()) shape: {(sigma - sigma.T.conj()).shape}"
+                )
                 delta[indices] += get_lambda(sigma)  # 1.j * (sigma - sigma.T.conj())
         delta[:] = xp.linalg.solve(
             self.gammas[0] + self.gammas[1] + 2 * self.eta * self.S, delta
@@ -162,10 +170,10 @@ class GreenFunction(BaseGreenFunction):
         return (
             dots(
                 self.gammas[0],
-                self.retarded(energy),
+                G_r,
                 self.gammas[1],
                 delta,
-                self.advanced(energy),
+                G_a,
             )
             .trace()
             .real
