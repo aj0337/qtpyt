@@ -9,6 +9,9 @@ from qtpyt.block_tridiag.recursive import (
     spectral_method,
 )
 
+inv = xp.linalg.inv  # la.inv
+dot = xp.dot
+
 
 class Solver:
     """The parent class of a generic solver.
@@ -116,19 +119,27 @@ class Dyson(Solver):
                 self.G = BTMatrix(*G)
         return self.G
 
-    # def get_transmission(self, energy):
-    #     _ = self.get_retarded(energy)
-    #     gamma_L = self.gf.gammas[0]
-    #     gamma_R = self.gf.gammas[1]
-    #     T_e = xp.einsum(
-    #         "ij,jk,kl,lm->im",
-    #         gamma_L,
-    #         self.g_1N,
-    #         gamma_R,
-    #         dagger(self.g_1N),
-    #         optimize=True,
-    #     ).real.trace()
-    #     return T_e
+    def get_projected_vertex_correction(self, energy, v_L, v_R, v_tip_L, v_tip_R):
+        for i, (indices, selfenergy) in enumerate(self.gf.selfenergies):
+            if i not in self.gf.idxleads:
+                sigma = selfenergy.retarded(energy)
+                delta = xp.zeros_like(sigma, dtype=complex)
+                delta += get_lambda(sigma)
+        # Step 1: Expand delta to tip subspace (306, 306)
+        delta_tip_L = v_tip_L @ delta @ v_tip_L.conj().T  # (306, 306)
+        delta_tip_R = v_tip_R @ delta @ v_tip_R.conj().T  # (306, 306)
+
+        # Step 2: Expand to lead subspace (810, 810)
+        projected_delta = xp.zeros(
+            (v_L.shape[0], v_L.shape[0]), dtype=complex
+        )  # (810, 810)
+        projected_delta += v_L @ delta_tip_L @ v_L.conj().T
+        projected_delta += v_R @ delta_tip_R @ v_R.conj().T
+
+        return projected_delta
+
+        # delta = v_L @ delta @ v_L.conj().T + v_R @ delta @ v_R.conj().T
+        # return delta
 
     def get_transmission(self, energy, ferretti):
         _ = self.get_retarded(energy)
@@ -147,21 +158,15 @@ class Dyson(Solver):
             ).real.trace()
             return T_e
 
-        # Ferretti correction
         print("Ferretti correction")
-        for i, (indices, selfenergy) in enumerate(self.gf.selfenergies):
-            if i not in self.gf.idxleads:
-                sigma = selfenergy.retarded(energy)
-                delta = xp.zeros_like(sigma, dtype=complex)
-                delta += get_lambda(sigma)
-        print(f"delta shape: {delta.shape}")
-        print(f"gamma_L shape: {gamma_L.shape}")
-        print(f"gamma_R shape: {gamma_R.shape}")
-        print(f"self.gf.S shape: {self.gf.S.shape}")
-        print(f"self.g_1N shape: {self.g_1N.shape}")
-        # Solve for delta using the same system:
+
+        v_L = self.gf.H.m_qij[0]
+        v_tip_L = self.gf.H.m_qij[1]
+        v_R = self.gf.H.m_qji[-1]
+        v_tip_R = self.gf.H.m_qji[-2]
+        delta = self.get_projected_vertex_correction(energy, v_L, v_R, v_tip_L, v_tip_R)
         delta[:] = xp.linalg.solve(
-            gamma_L + gamma_R + 2 * self.gf.eta * self.gf.S, delta
+            gamma_L + gamma_R + 2 * self.gf.eta * self.gf.S.m_qii[0], delta
         )
         delta.flat[:: len(delta) + 1] += 1.0
 

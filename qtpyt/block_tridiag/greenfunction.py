@@ -75,14 +75,20 @@ class GreenFunction(BaseGreenFunction):
         _fill(S, 1)
         _fill(H, 0)
 
-        S = BTMatrix(S.m_qii, S.m_qij, S.m_qji)
-        H = BTMatrix(H.m_qii, H.m_qij, H.m_qji)
+        # S = BTMatrix(S.m_qii, S.m_qij, S.m_qji)
+        # H = BTMatrix(H.m_qii, H.m_qij, H.m_qji)
+
+        self.S = BTMatrix(S.m_qii, S.m_qij, S.m_qji)
+        self.H = BTMatrix(H.m_qii, H.m_qij, H.m_qji)
 
         self.Ginv = empty_buffer(N)
 
         self.selfenergies = selfenergies
         self.idxleads = idxleads
         self.gammas = [None] * len(idxleads)
+
+        self.H = self.H
+        self.S = self.S
 
         super().__init__(H, S, eta, mu, kt)
 

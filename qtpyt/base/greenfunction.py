@@ -155,13 +155,7 @@ class GreenFunction(BaseGreenFunction):
         G_a = self.advanced(energy)
         for i, (indices, selfenergy) in enumerate(self.selfenergies):
             if i not in self.idxleads:
-                print(f"i:{i} not in idxleads")
-                print(f"indices: {indices}")
-                print(f"delta[indices] shape: {delta[indices].shape}")
                 sigma = selfenergy.retarded(energy)
-                print(
-                    f"(sigma - sigma.T.conj()) shape: {(sigma - sigma.T.conj()).shape}"
-                )
                 delta[indices] += get_lambda(sigma)  # 1.j * (sigma - sigma.T.conj())
         delta[:] = xp.linalg.solve(
             self.gammas[0] + self.gammas[1] + 2 * self.eta * self.S, delta
