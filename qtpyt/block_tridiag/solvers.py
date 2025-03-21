@@ -148,7 +148,6 @@ class Dyson(Solver):
         gamma_R = self.gf.gammas[1]
 
         if (len(self.gf.idxleads) == len(self.gf.selfenergies)) or (not (ferretti)):
-            print("No Ferretti correction")
             T_e = xp.einsum(
                 "ij,jk,kl,lm->im",
                 gamma_L,
@@ -158,8 +157,6 @@ class Dyson(Solver):
                 optimize=True,
             ).real.trace()
             return T_e
-
-        print("Ferretti correction")
 
         v_L = self.gf.H.m_qij[0]
         v_tip_L = self.gf.H.m_qij[1]

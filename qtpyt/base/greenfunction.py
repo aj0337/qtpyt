@@ -143,12 +143,10 @@ class GreenFunction(BaseGreenFunction):
     def get_transmission(self, energy, ferretti=True):
         """Get the transmission coeffiecient."""
         if (len(self.idxleads) == len(self.selfenergies)) or (not (ferretti)):
-            print("No Ferretti correction.")
             a_mm = self.retarded(energy).dot(self.gammas[0])  # updates gammas
             b_mm = self.advanced(energy).dot(self.gammas[1])
             return dottrace(a_mm, b_mm).real
 
-        print("Using the Ferretti correction.")
         # Ferretti : https://journals.aps.org/prb/pdf/10.1103/PhysRevB.72.125114
         delta = xp.zeros(self.shape, complex)
         G_r = self.retarded(energy)  # required for populating gammas
