@@ -125,6 +125,7 @@ class Dyson(Solver):
                 sigma = selfenergy.retarded(energy)
                 delta = xp.zeros_like(sigma, dtype=complex)
                 delta += get_lambda(sigma)
+        delta.flat[:: len(delta) + 1] += 1.0
         # Step 1: Expand delta to tip subspace (306, 306)
         delta_tip_L = v_tip_L @ delta @ v_tip_L.conj().T  # (306, 306)
         delta_tip_R = v_tip_R @ delta @ v_tip_R.conj().T  # (306, 306)
