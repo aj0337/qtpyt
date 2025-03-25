@@ -185,6 +185,7 @@ class GreenFunction(BaseGreenFunction):
 
     def get_spectrals(self, energy):
         """Get spectral functions."""
+        self.get_Ginv(energy)
         spectrals = []
         for gamma in self.gammas:
             spectrals.append(
