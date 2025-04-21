@@ -119,7 +119,7 @@ class GreenFunction(BaseGreenFunction):
 
         return self.Ginv
 
-    def get_transmission(self, energy, ferretti=True):
+    def get_transmission(self, energy, ferretti=False):
         return self.solver.get_transmission(energy, ferretti)
 
     def get_spectrals(self, energy):
