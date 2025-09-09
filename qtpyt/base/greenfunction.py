@@ -79,7 +79,7 @@ class GreenFunction(BaseGreenFunction):
         self.selfenergies = selfenergies
         self.idxleads = sorted(idxleads)
         self.gammas = None
-
+        self.delta = None
         super().__init__(H, S, eta, mu, kt)
 
     @property
@@ -140,9 +140,11 @@ class GreenFunction(BaseGreenFunction):
         # > = < + r - a
         return self.lesser(energy) + self.retarded(energy) - self.advanced(energy)
 
-    def get_transmission(self, energy, ferretti=True):
+    def get_transmission(self, energy, ferretti=True, brazilian=False):
         """Get the transmission coeffiecient."""
-        if (len(self.idxleads) == len(self.selfenergies)) or (not (ferretti)):
+        if (len(self.idxleads) == len(self.selfenergies)) and not (
+            brazilian or ferretti
+        ):
             a_mm = self.retarded(energy).dot(self.gammas[0])  # updates gammas
             b_mm = self.advanced(energy).dot(self.gammas[1])
             return dottrace(a_mm, b_mm).real
@@ -155,21 +157,51 @@ class GreenFunction(BaseGreenFunction):
             if i not in self.idxleads:
                 sigma = selfenergy.retarded(energy)
                 delta[indices] += get_lambda(sigma)  # 1.j * (sigma - sigma.T.conj())
-        delta[:] = xp.linalg.solve(
-            self.gammas[0] + self.gammas[1] + 2 * self.eta * self.S, delta
-        )
-        delta.flat[:: len(delta) + 1] += 1.0
-        return (
+
+        # Elastic part (delta = identity)
+        T_elastic = (
             dots(
                 self.gammas[0],
                 G_r,
                 self.gammas[1],
-                delta,
                 G_a,
             )
             .trace()
             .real
         )
+
+        if ferretti:
+            delta[:] = xp.linalg.solve(
+                self.gammas[0] + self.gammas[1] + 2 * self.eta * self.S, delta
+            )
+            self.delta = delta
+            T_inelastic = (
+                dots(
+                    self.gammas[0],
+                    G_r,
+                    self.gammas[1],
+                    delta,
+                    G_a,
+                )
+                .trace()
+                .real
+            )
+        elif brazilian:
+            self.delta = delta
+            T_inelastic = (
+                dots(
+                    self.gammas[0],
+                    G_r,
+                    delta,
+                    G_a,
+                )
+                .trace()
+                .real
+            )
+
+        T_total = T_elastic + T_inelastic
+
+        return T_total, T_elastic, T_inelastic
 
     def get_current(self, energy):
         """The current density."""
