@@ -18,3 +18,4 @@ qtpyt.egg-info/
 build
 dist
 *.lua
+*.c
