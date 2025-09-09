@@ -8,7 +8,7 @@ from qtpyt.block_tridiag.recursive import (
     dyson_method,
     spectral_method,
 )
-
+import scipy
 inv = xp.linalg.inv  # la.inv
 dot = xp.dot
 
@@ -142,12 +142,13 @@ class Dyson(Solver):
         # delta = v_L @ delta @ v_L.conj().T + v_R @ delta @ v_R.conj().T
         # return delta
 
-    def get_transmission(self, energy, ferretti):
+
+    def get_transmission(self, energy, ferretti, normalize=False, tol=1e-10):
         _ = self.get_retarded(energy)
         gamma_L = self.gf.gammas[0]
         gamma_R = self.gf.gammas[1]
 
-        if (len(self.gf.idxleads) == len(self.gf.selfenergies)) or (not (ferretti)):
+        if (len(self.gf.idxleads) == len(self.gf.selfenergies)) or (not ferretti):
             T_e = xp.einsum(
                 "ij,jk,kl,lm->im",
                 gamma_L,
@@ -156,7 +157,19 @@ class Dyson(Solver):
                 dagger(self.g_1N),
                 optimize=True,
             ).real.trace()
-            return T_e
+
+            if normalize:
+                sqrt_gamma_L = scipy.linalg.sqrtm(gamma_L)
+                sqrt_gamma_R = scipy.linalg.sqrtm(gamma_R)
+                t_matrix = sqrt_gamma_R @ self.g_1N @ sqrt_gamma_L
+                tau = xp.linalg.eigvalsh(t_matrix.conj().T @ t_matrix)
+                tau = xp.flip(xp.sort(tau.real))
+                N_open = xp.sum(tau > tol)
+                print("E, N", energy, N_open)
+                return T_e / N_open if N_open > 0 else 0.0
+
+            else:
+                return T_e
 
         v_L = self.gf.H.m_qij[0]
         v_tip_L = self.gf.H.m_qij[1]
