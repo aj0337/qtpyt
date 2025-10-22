@@ -199,6 +199,9 @@ class GreenFunction(BaseGreenFunction):
                 .real
             )
 
+        else:
+            T_inelastic = 0.0
+
         T_total = T_elastic + T_inelastic
 
         return T_total, T_elastic, T_inelastic
