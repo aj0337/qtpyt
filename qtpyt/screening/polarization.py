@@ -1,3 +1,23 @@
+r"""Polarization, RPA screened interaction, GW self-energy and constrained RPA.
+
+The chain of a GW calculation on the real-energy grid:
+
+1. :class:`Chi`, the polarization :math:`P` (the density response of
+   non-interacting electrons), from the bubble :math:`G \times G`;
+2. :class:`WRPA`, the screened interaction :math:`W = [1 - VP]^{-1} V` in
+   the random-phase approximation;
+3. :class:`GW`, the correlation self-energy :math:`\Sigma = iGW`.
+
+:class:`cRPA` gives instead the partially screened interaction of a
+correlated subspace (the effective Hubbard :math:`U` for impurity models),
+with the screening from inside that subspace removed.
+"""
+from __future__ import annotations
+
+from typing import Any, Optional, Sequence
+
+from numpy.typing import NDArray
+
 from math import pi, sqrt
 
 # Also import numpy for array matrices
@@ -16,32 +36,40 @@ from qtpyt.screening.tools import lesser_from_retarded, roll, rotate
 
 
 class Chi(LangrethPair):
-    """Polarization.
-    
-    This class computes the polarization function. It is the base class
-    for any caluclation that requires the convolution of the the outer
-    product of a green's function. 
-    
-    At the end of an update, the langreth arrays will contain the retarded
-    and greater components in energy domain.
-    
-    Args:
-        gf : (DistGreenFunction) object
-            the green's function for which to compute the 
-            polarization.
-            
-        U_qp : (optional)
-            rotation to go from full pair orbitals to opti-
-            mized pair orbitlas. (#q < #p).
-            
-    Attributes:
-        This class and those inheriting follow the convention
-        to define a solve and an update method. The first will only
-        solve the task of the current class whereas the second
-        will also take care of updating the parent classes.
+    r"""Polarization :math:`P(E)` of non-interacting electrons, the RPA bubble.
+
+    :math:`P` measures how the electron density rearranges in response to a
+    potential: an electron is promoted from an occupied to an empty state,
+    leaving a hole. In time it is the product of an electron and a hole
+    propagator,
+
+    .. math::
+
+        P^\lessgtr_{ij,kl}(t) = -2i\,G^\lessgtr_{ik}(t)\,G^\gtrless_{lj}(-t)
+        = 2i\,G^\lessgtr_{ik}(t)\,\big[G^\gtrless_{jl}(t)\big]^*,
+
+    with the factor 2 for spin. The retarded component follows from
+    :math:`P^r(t) = \theta(t)[P^>(t) - P^<(t)]`. After :meth:`update_polarization`
+    the arrays hold :math:`P^r(E)` and :math:`P^>(E)`.
+
+    Parameters
+    ----------
+    gf : DistGreenFunction
+        Green's function of the region.
+    U_pq : ndarray, shape (n_orb**2, n_q), optional
+        Rotation from all orbital pairs to optimized pair orbitals; then
+        :math:`P` is stored as :math:`U^\dagger P U`.
+    oversample : int, default 10
+        Zero-padding factor of the time–energy transforms.
+
+    Notes
+    -----
+    Here and in the derived classes, a ``solve_*`` method does only its own
+    step from the current inputs, and the matching ``update_*`` method also
+    brings the inputs up to date first.
     """
 
-    def __init__(self, gf: DistGreenFunction, U_pq=None, oversample=10) -> None:
+    def __init__(self, gf: DistGreenFunction, U_pq: Optional[NDArray] = None, oversample: int = 10) -> None:
         self.gf = gf
         # Decide if polarization is for full or optimized pair orbitals.
         nq = gf.no ** 2 if U_pq is None else U_pq.shape[1]
@@ -50,14 +78,17 @@ class Chi(LangrethPair):
         self.U_pq = U_pq if U_pq is None else xp.asarray(U_pq)
         # self.U_qp = None if U_pq is None else self.U_pq.T.copy()
 
-    def get_work_array(self):
-        """Get temp work arrays used in product."""
+    def get_work_array(self) -> Optional[NDArray]:
+        """Scratch array for the pair-orbital rotation, or ``None`` without one."""
         if self.U_pq is None:
             return None
         return xp.empty_like(self.U_pq)
 
-    def solve_polarization(self):
-        """Compute polarization product."""
+    def solve_polarization(self) -> None:
+        r"""Compute :math:`P^r(E)` and :math:`P^>(E)` from :math:`G^<(t)` and :math:`G^>(t)`.
+
+        The Green's function must already be in the time domain.
+        """
         #
         #         </>        +     </>      >/<
         #       P   =  2 i U   ( G    x   G    ) U
@@ -111,8 +142,8 @@ class Chi(LangrethPair):
         self.domain = "t"
         self.convert_less_and_great_to_ret(-self.zero_index)  #  Pr(e), P>(e)
 
-    def update_polarization(self):
-        """Update retarded and greater components."""
+    def update_polarization(self) -> None:
+        r"""Bring the Green's function up to date and compute :math:`P^r(E)`, :math:`P^>(E)`."""
         #
         #         r               <    >
         #       P   =  theta(t) (P  - P )
@@ -127,36 +158,38 @@ class Chi(LangrethPair):
 
 
 class WRPA(Chi):
-    """Screened interaction within RPA.
-    
-    This class computes the screened interaction whithin the
-    RPA approximation.
-    
-    Inherits from polarization baseclass. An update of this class
-    will start from the polarizations computeted by an update of
-    the parent and will overwrite the langreth arrays with the 
-    retarded and greater components in energy domain.
-    
-    Args:
-        gf : (DistGreenFunction) object
-            the green's function for which to compute the 
-            polarization.
-        
-        V_qq : (ndarray)
-            coulomb matrix in either full or optimized
-            pair orbital basis.
-        
-        U_qp : (optional)
-            rotation to go from full pair orbitals to opti-
-            mized pair orbitlas. (#q < #p).
+    r"""Screened Coulomb interaction :math:`W(E)` in the random-phase approximation.
+
+    The bare repulsion :math:`V` between two electrons is reduced because
+    the other electrons rearrange to screen it. Summing the chain of
+    polarization bubbles gives
+
+    .. math::
+
+        W^r = [1 - V P^r]^{-1} V, \qquad W^> = W^r P^> W^a.
+
+    After :meth:`update_screening` the arrays hold :math:`W^r(E)` and
+    :math:`W^>(E)`, in the memory that held :math:`P^r` and :math:`P^>`.
+
+    Parameters
+    ----------
+    gf : DistGreenFunction
+        Green's function of the region.
+    V_qq : ndarray, shape (n_q, n_q)
+        Bare Coulomb matrix in the pair-orbital basis (full or optimized).
+    U_pq : ndarray, shape (n_orb**2, n_q), optional
+        Rotation to optimized pair orbitals, see :class:`Chi`.
+    oversample : int, default 10
+        Zero-padding factor.
     """
 
-    def __init__(self, gf, V_qq, U_pq=None, oversample=10) -> None:
+    def __init__(self, gf: DistGreenFunction, V_qq: NDArray, U_pq: Optional[NDArray] = None, oversample: int = 10) -> None:
         super().__init__(gf, U_pq, oversample=oversample)
         self.V_qq = V_qq
 
     @assert_domain("e")
-    def solve_screening(self):
+    def solve_screening(self) -> None:
+        r"""Turn :math:`P^r`, :math:`P^>` into :math:`W^r`, :math:`W^>` at every local energy."""
         I = np.eye(self.no)
         Wr = Pr = self.arrays["r"]
         Wg = Pg = self.arrays["g"]
@@ -168,12 +201,8 @@ class WRPA(Chi):
             rotate(Pg[e], Wr[e], out=Wg[e], work=work)
             # Wg[e] = Wr[e].dot(Pg[e]).dot(Wr[e].T.conj())
 
-    def update_screening(self):
-        """Update retared and greater components.
-        
-        NOTE : This method will overwrite the retarded and greater polarizations
-        with the corresponding screened interaction.
-        """
+    def update_screening(self) -> None:
+        r"""Compute the polarization, then :math:`W^r(E)` and :math:`W^>(E)` in its place."""
         #       r             r
         #      W    = [I - V P ] V
         #
@@ -185,37 +214,36 @@ class WRPA(Chi):
 
 
 class GW(LangrethPair):
-    """GW selfenergy.
-    
-    This class computes the GW selfenergy within the RPA
-    approximation. 
-    
-    Inherits from screened interaction class. An update of
-    this class starts from the screening computed by the parent,
-    converts the langreth pair to the their lesser and grea-
-    ter components in energy domain, and overwrites the lesser
-    and greater components of the green's function. 
-    
-    NOTE :This means that at the end of a call to this class the 
-    lesser and greater green's function will contain the corresp-
-    onding GW selfenergies.
-    
-    Args:
-        gf : (DistGreenFunction) object
-            the green's function for which to compute the 
-            polarization.
-        
-        V_qq : (ndarray)
-            coulomb matrix in either full or optimized
-            pair orbital basis.
-        
-        U_qp : (optional)
-            rotation to go from full pair orbitals to opti-
-            mized pair orbitlas. (#q < #p).
+    r"""Correlation part of the GW self-energy with an RPA screened interaction.
+
+    An electron propagating through the region polarizes its surroundings
+    and is dressed by the screened interaction it creates. To lowest order
+    in :math:`W`,
+
+    .. math::
+
+        \Sigma^\lessgtr_{ij}(t) = i \sum_{kl} G^\lessgtr_{kl}(t)\, W^\lessgtr_{ik,jl}(t),
+
+    and :math:`\Sigma^r(t) = \theta(t)[\Sigma^> - \Sigma^<](t)`. :math:`W^\lessgtr`
+    are the lesser and greater components of the screened interaction. After
+    :meth:`update_correlation` the arrays hold :math:`\Sigma^r(E)` and
+    :math:`\Sigma^<(E)`, and the object can be attached to a
+    :class:`~qtpyt.base.greenfunction.GreenFunction` as a self-energy.
+
+    Parameters
+    ----------
+    wrpa : WRPA
+        Screened interaction.
+    gf : DistGreenFunction, optional
+        Green's function in :math:`\Sigma = iGW`; that of ``wrpa`` if omitted.
+    U_pq : ndarray, optional
+        Rotation to optimized pair orbitals; that of ``wrpa`` if omitted.
+    oversample : int, default 10
+        Zero-padding factor.
     """
 
     def __init__(
-        self, wrpa: WRPA, gf: DistGreenFunction = None, U_pq=None, oversample=10
+        self, wrpa: WRPA, gf: Optional[DistGreenFunction] = None, U_pq: Optional[NDArray] = None, oversample: int = 10
     ) -> None:
         self.wrpa = wrpa
         if gf is None:
@@ -228,13 +256,14 @@ class GW(LangrethPair):
             gf.global_energies, gf.no, dtype=complex, oversample=oversample
         )
 
-    def get_work_array(self):
-        """Get temp work arrays used in product."""
+    def get_work_array(self) -> Optional[NDArray]:
+        """Scratch array for the pair-orbital rotation, or ``None`` without one."""
         if self.U_pq is None:
             return None
         return xp.empty_like(self.U_pq)
 
-    def solve_correlation(self):
+    def solve_correlation(self) -> None:
+        r"""Compute :math:`\Sigma^r(E)`, :math:`\Sigma^<(E)` from the current :math:`G` and :math:`W`."""
 
         if self.gf.domain == "e":
             # At this point gf has been updated.
@@ -269,7 +298,8 @@ class GW(LangrethPair):
             self.zero_index, override="g"
         )  # domain << energy
 
-    def update_correlation(self):
+    def update_correlation(self) -> None:
+        r"""Recompute :math:`W` from the current :math:`G`, then the self-energy."""
         # update lesser greater green's
 
         self.wrpa.update_screening()  # Wr(e), W>(e)
@@ -277,20 +307,44 @@ class GW(LangrethPair):
         self.wrpa.convert_domain()  # W<(t), W>(t)
         self.solve_correlation()  # GWr(e), GW<(e)
 
-    def retarded(self, energy):
-        """The retarded GW self-energy."""
+    def retarded(self, energy: float) -> NDArray[np.complex128]:
+        r"""Retarded self-energy :math:`\Sigma^r` at the first grid energy not below ``energy``.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, on the grid; no interpolation is done.
+        """
         return self.arrays["r"][np.searchsorted(self.energies, energy)]
 
-    def lesser(self, energy):
-        """The retarded GW self-energy."""
+    def lesser(self, energy: float) -> NDArray[np.complex128]:
+        r"""Lesser self-energy :math:`\Sigma^<` at the first grid energy not below ``energy``.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, on the grid; no interpolation is done.
+        """
         return self.arrays["l"][np.searchsorted(self.energies, energy)]
 
 
 # Constrained methods
 
 
-def cut_rotation(U_pq, indices):
-    """Cut pairorbital rotation matrix."""
+def cut_rotation(U_pq: NDArray, indices: Sequence[int]) -> NDArray:
+    """Rows of a pair-orbital rotation that belong to pairs within a subset of orbitals.
+
+    Parameters
+    ----------
+    U_pq : ndarray, shape (n_orb**2, n_q)
+        Rotation from all orbital pairs to optimized pair orbitals.
+    indices : sequence of int
+        Orbitals of the subset.
+
+    Returns
+    -------
+    U_cq : ndarray, shape (len(indices)**2, n_q)
+    """
     no2, nq = U_pq.shape
     no = int(sqrt(no2))
     assert no ** 2 == no2, "# p is not square of orbitals."
@@ -303,9 +357,30 @@ def cut_rotation(U_pq, indices):
 
 
 class cRPA(LangrethPair):
-    """Constrained RPA."""
+    r"""Partially screened interaction :math:`U(E)` of a correlated subspace, by constrained RPA.
 
-    def __init__(self, wrpa: WRPA, ic: np.ndarray) -> None:
+    When the correlated orbitals (for example a :math:`d` shell) are treated
+    by an impurity solver, their own screening is already part of that
+    solution and must not be counted twice. The polarization from
+    transitions within the subspace is therefore set to zero before
+    screening, and the resulting interaction is restricted to the subspace:
+
+    .. math::
+
+        U^r = \big[(1 - V P^r_\mathrm{rest})^{-1} V\big]_{cc}.
+
+    After :meth:`update_unscreening` the array ``arrays['r']`` holds
+    :math:`U^r(E)`.
+
+    Parameters
+    ----------
+    wrpa : WRPA
+        Screened-interaction calculation of the whole region.
+    ic : ndarray of int
+        Orbitals of the correlated subspace.
+    """
+
+    def __init__(self, wrpa: WRPA, ic: NDArray[np.int_]) -> None:
         self.U_qq = None  # sets to 0. polarization of `c` subspace
         self.U_cq = None
         if wrpa.U_pq is not None:
@@ -334,8 +409,8 @@ class cRPA(LangrethPair):
             # return rotate(P, self.U_qq, work=work, overwrite_a=True)
 
     # @assert_domain("e")
-    def screen_polarization(self):
-        """Set to zero the polarization of the constrained region."""
+    def screen_polarization(self) -> None:
+        """Remove the polarization of transitions within the correlated subspace."""
         Pr = self.wrpa.arrays["r"]
         work = (
             None
@@ -356,7 +431,8 @@ class cRPA(LangrethPair):
             # return rotate(W, self.U_cq, work=work, out=out)
 
     # @assert_domain("e")
-    def solve_unscreening(self):
+    def solve_unscreening(self) -> None:
+        """Restrict the screened interaction to the correlated subspace."""
         Wr = self.wrpa.arrays["r"]
         Ur = self.arrays["r"]
         work = (
@@ -367,7 +443,8 @@ class cRPA(LangrethPair):
         for e in range(Wr.shape[0]):
             self._cut_screening(Wr[e], work=work, out=Ur[e])
 
-    def update_unscreening(self):
+    def update_unscreening(self) -> None:
+        r"""Compute :math:`P`, remove its subspace part, screen, and restrict to the subspace."""
         # update lesser greater green's
         self.wrpa.update_polarization()  # Pr(e), P>(e)
         self.screen_polarization()  # Pr'(e) :: ' means `c` subspace is 0.

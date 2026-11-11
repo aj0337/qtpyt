@@ -1,50 +1,42 @@
+r"""Index contractions of one- and two-particle matrices that build polarizations and self-energies.
+
+Two-particle matrices carry a pair index :math:`(ij)` on each side and are
+stored as :math:`n_\mathrm{orb}^2 \times n_\mathrm{orb}^2` matrices, or as
+:math:`n_q \times n_q` matrices in a reduced pair-orbital basis reached with a
+rotation :math:`U` of shape :math:`(n_\mathrm{orb}^2, n_q)`. All functions
+work on NumPy or CuPy arrays.
+"""
+from __future__ import annotations
+
+from typing import Optional, Union
+
+from numpy.typing import NDArray
+
 import numpy as np
 from qtpyt import xp
 
 
-def polarization_product(G, Gd, pre=1.0, out=None, rot=None, work1=None, work2=None):
-    """Perform kronecker matrix product (G otimes Gd).
+def polarization_product(G: NDArray, Gd: NDArray, pre: Union[float, complex] = 1.0, out: Optional[NDArray] = None, rot: Optional[NDArray] = None, work1: Optional[NDArray] = None, work2: Optional[NDArray] = None) -> NDArray:
+    r"""Bubble product :math:`P_{ij,kl} = c\,G_{ik}\,\tilde G_{jl}`, the building block of the polarization.
 
-    If rot is specified, it is used to rotate the output, such that
-    rot^dag . out . rot is returned instead of out
+    Parameters
+    ----------
+    G, Gd : ndarray, shape (n, n)
+        The two propagators :math:`G` and :math:`\tilde G`, for example
+        :math:`G^<(t)` and :math:`[G^>(t)]^*`.
+    pre : float or complex, default 1.0
+        Prefactor :math:`c`.
+    out : ndarray, optional
+        Array for the result.
+    rot : ndarray, shape (n**2, n_q), optional
+        Pair-orbital rotation :math:`U`; the result is then
+        :math:`U^\dagger P U`, of shape ``(n_q, n_q)``.
+    work1, work2 : ndarray, optional
+        Scratch arrays of the shape of ``rot``.
 
-    Args:
-
-        G: ndarray
-            input matrix of shape Ni x Ni
-        Gd: ndarray
-            input matrix of shape Ni x Ni
-
-    Optional:
-        
-        pre: float or complex (default: 1.0)
-            the output is multiplied by this prefactor
-        rot: ndarray (default: None)
-            if specified, this is used to rotate output.
-            shape is Ni^2 x Nq
-        rotd: ndarray (default: None)
-            dagger(rot) if rot is specified.
-            shape is Nq x Ni^2
-        out: ndarray (default None)
-            if specified, this is used for the output array, otherwise it is
-            created. A reference to out is always returned
-        work: ndarray (default None)
-            used when rot is given.
-            shape is Ni^2 x Nq
-
-        NOTE : Nq is 
-                i) Ni^2 when rot is None
-                ii) # of pair orbitals when rot is given.
-                
-    If rot is None, the out array generally has the elements::
-
-      out_ij,kl = pre * G_ik Gd_jl
-
-    Else::
-    
-      out_qq' = pre * sum_ijkl Ud_q,ij G_ik Gd_jl U_kl,q'
-      
-    NOTE: Matrices can be on GPU.
+    Returns
+    -------
+    out : ndarray, shape (n**2, n**2) or (n_q, n_q)
     """
     #
     #                  -->--
@@ -99,41 +91,30 @@ def polarization_product(G, Gd, pre=1.0, out=None, rot=None, work1=None, work2=N
     return out
 
 
-def exchange_product(G, V, pre=1.0, out=None, rot=None, work1=None, work2=None):
-    """Perform matrix product sum_kl G_kl V_ik,jl
+def exchange_product(G: NDArray, V: NDArray, pre: Union[float, complex] = 1.0, out: Optional[NDArray] = None, rot: Optional[NDArray] = None, work1: Optional[NDArray] = None, work2: Optional[NDArray] = None) -> NDArray:
+    r"""Exchange-type contraction :math:`\Sigma_{ij} = c\sum_{kl} G_{kl}\,V_{ik,jl}`.
 
-    If rot is specified, it is used to rotate V, such that
-    rot . V . rot^dag is used instead of V.
+    With :math:`G` the density matrix and :math:`V` the bare interaction this
+    is the Fock self-energy; with :math:`G^\lessgtr(t)` and
+    :math:`W^\lessgtr(t)` it is the GW self-energy.
 
-    Arguments:
+    Parameters
+    ----------
+    G : ndarray, shape (n, n)
+    V : ndarray, shape (n**2, n**2) or (n_q, n_q)
+        Two-particle matrix, in the reduced basis when ``rot`` is given.
+    pre : float or complex, default 1.0
+        Prefactor :math:`c`.
+    out : ndarray, shape (n, n), optional
+        Array for the result.
+    rot : ndarray, shape (n**2, n_q), optional
+        Pair-orbital rotation :math:`U`; :math:`U V U^\dagger` is used for :math:`V`.
+    work1, work2 : ndarray, optional
+        Scratch arrays.
 
-    G: ndarray
-       input matrix of shape Ni x Ni
-    V: ndarray
-       input matrix of shape Nq x Nq
-       
-    NOTE : see definition Nq above.
-
-    Optional parameters:
-    
-    pre: float or complex (default: 1.0)
-         the output is multiplied by this prefactor
-    rot: ndarray, len(G)**2 x len(V) (default: None)
-         if specified, V is replaced by rot . V . rot^dag
-    out: ndarray (default None)
-         if specified, this is used for the output array, otherwise it is
-         created. A reference to out is always returned
-    work: ndarray (default None)
-            used when rot is given.
-            shape is Ni^2 x Nq
-
-    If rot is None, the out array generally has the elements::
-
-      out_ij = pre * sum_kl G_kl V_ik,jl
-
-    Else::
-    
-      out_ij = pre * sum_klqq' G_kl rot_ik,q V_qq' (rot^dag)_q',jl
+    Returns
+    -------
+    out : ndarray, shape (n, n)
     """
     assert G.dtype == V.dtype
     if out is None:
@@ -165,40 +146,29 @@ def exchange_product(G, V, pre=1.0, out=None, rot=None, work1=None, work2=None):
     return out
 
 
-def hartree_product(G, V, pre=1.0, out=None, rot=None, work1=None, work2=None):
-    """Perform matrix product sum_kl G_kl V_ij,kl
-    
-    If rot is specified, it is used to rotate V, such that
-    rot . V . rot^dag is used instead of V.
+def hartree_product(G: NDArray, V: NDArray, pre: Union[float, complex] = 1.0, out: Optional[NDArray] = None, rot: Optional[NDArray] = None, work1: Optional[NDArray] = None, work2: Optional[NDArray] = None) -> NDArray:
+    r"""Hartree-type contraction :math:`\Sigma_{ij} = c\sum_{kl} G_{kl}\,V_{ij,kl}`.
 
-    Arguments:
+    With :math:`G` the density matrix this is the electrostatic (Hartree)
+    potential of the electron density.
 
-    G: ndarray
-       input matrix of shape Ni x Ni
-    V: ndarray
-       input matrix of shape Ni**2 x Ni**2
+    Parameters
+    ----------
+    G : ndarray, shape (n, n)
+    V : ndarray, shape (n**2, n**2) or (n_q, n_q)
+        Two-particle matrix, in the reduced basis when ``rot`` is given.
+    pre : float or complex, default 1.0
+        Prefactor :math:`c`.
+    out : ndarray, shape (n, n), optional
+        Array for the result.
+    rot : ndarray, shape (n**2, n_q), optional
+        Pair-orbital rotation :math:`U`; :math:`U V U^\dagger` is used for :math:`V`.
+    work1, work2 : ndarray, optional
+        Scratch arrays.
 
-    Optional parameters:
-    
-    pre: float or complex (default: 1.0)
-         the output is multiplied by this prefactor
-    rot: ndarray (default: None)
-         if specified, V is replaced by rot . V . rot^dag
-         shape is Ni^2 x Nq
-    out: ndarray (default None)
-         if specified, this is used for the output array, otherwise it is
-         created. A reference to out is always returned
-    work: ndarray (default None)
-         used when rot is given.
-         shape is Ni^2 x Nq
-
-    If rot is None, the out array generally has the elements::
-
-      out_ij = pre * sum_kl G_kl V_ij,kl
-
-    Else::
-    
-      out_ij = pre * sum_klqq' G_kl rot_ij,q V_qq' (rot^dag)_q',kl
+    Returns
+    -------
+    out : ndarray, shape (n, n)
     """
     assert G.dtype == V.dtype
     if out is None:

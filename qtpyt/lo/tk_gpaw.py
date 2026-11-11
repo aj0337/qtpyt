@@ -1,3 +1,14 @@
+r"""Local-orbital tools that read the orbital layout from a GPAW calculator.
+
+Counterparts of :mod:`qtpyt.lo.tools` for code that works with a GPAW
+calculator instead of a :class:`~qtpyt.basis.Basis`. Requires GPAW.
+"""
+from __future__ import annotations
+
+from typing import Any, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
+
+from numpy.typing import NDArray
+
 import numpy as np
 from scipy import linalg as la
 from ase.calculators.singlepoint import SinglePointCalculator
@@ -13,7 +24,22 @@ from .tools import (
 from .block import block
 
 
-def get_atom_indices(calc, a):
+def get_atom_indices(calc: Any, a: Union[int, str, Sequence[Union[int, str]]]) -> List[int]:
+    """Atom indices from indices and chemical symbols.
+
+    Parameters
+    ----------
+    calc : gpaw.GPAW
+        Calculator holding the atoms.
+    a : int, str or sequence of int and str
+        Atom indices, or element symbols standing for all atoms of that
+        element (also in a repeated ``calc.atoms``).
+
+    Returns
+    -------
+    indices : list of int
+        Sorted atom indices.
+    """
     from .tk_calc import get_info
 
     M_a, nao_a, nao = get_info(calc, ["M_a", "nao_a", "nao"])
@@ -39,11 +65,16 @@ def get_atom_indices(calc, a):
     return ai
 
 
-def get_bfs_indices(calc, a, method="extend"):
-    """Get list of basis function indices of atom(s) a.
-    Available methods:
-        1. 'extend' - return flatten ao indices
-        2. 'append' - return ao.shape(natoms,nao)
+def get_bfs_indices(calc: Any, a: Union[int, Sequence[int]], method: str = "extend") -> List[Any]:
+    """Orbital indices of one or more atoms.
+
+    Parameters
+    ----------
+    calc : gpaw.GPAW
+    a : int or sequence of int
+        Atom indices.
+    method : {'extend', 'append'}, default 'extend'
+        ``'extend'`` returns one flat list, ``'append'`` one list per atom.
     """
     from .tk_calc import get_info
 
@@ -59,11 +90,18 @@ def get_bfs_indices(calc, a, method="extend"):
     return Mvalues
 
 
-def get_bfs_atoms(atoms, basis=None, default="dzp", method="extend"):
-    """Get ba
-    atoms - ase::atoms
-    basis - dict of elements with correspondig basis set type
-    default - str
+def get_bfs_atoms(atoms: Any, basis: Optional[dict] = None, default: str = "dzp", method: str = "extend") -> List[Any]:
+    """Orbital indices of every atom, from the GPAW basis-set sizes.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+    basis : dict, optional
+        ``{symbol: basis-set name}``; ``default`` for all elements if omitted.
+    default : str, default 'dzp'
+        Basis set of elements missing from ``basis``.
+    method : {'extend', 'append'}, default 'extend'
+        One flat list, or one list per atom.
     """
     if basis is None:
         basis = {symbol: default for symbol in set(atoms.symbols)}
@@ -82,8 +120,17 @@ def get_bfs_atoms(atoms, basis=None, default="dzp", method="extend"):
     return Mvalues
 
 
-def subdiagonalize_atoms(calc, h_ii, s_ii, a=None):
-    """Get rotation matrix for subdiagonalization of given(all) atoms."""
+def subdiagonalize_atoms(calc: Any, h_ii: NDArray, s_ii: NDArray, a: Optional[Union[int, Sequence[int]]] = None) -> Tuple[NDArray, List[NDArray]]:
+    """Rotation that diagonalizes the Hamiltonian on each selected atom, see :func:`qtpyt.lo.tools.subdiagonalize_atoms`.
+
+    Parameters
+    ----------
+    calc : gpaw.GPAW
+    h_ii, s_ii : ndarray, shape (n, n)
+        Hamiltonian and overlap.
+    a : int or sequence of int, optional
+        Atoms to treat; all if omitted.
+    """
     from scipy.linalg import block_diag
 
     if a is None:
@@ -105,8 +152,19 @@ def subdiagonalize_atoms(calc, h_ii, s_ii, a=None):
     return U_mm, e_aj
 
 
-def subdiagonalize_blocks(calc, h_ii, s_ii, a=None):
-    """Get rotation matrix for subdiagonalization of given(all) atoms."""
+def subdiagonalize_blocks(calc: Any, h_ii: NDArray, s_ii: NDArray, a: Optional[Sequence[int]] = None) -> Tuple[NDArray, List[NDArray]]:
+    """Block diagonal rotation built only from the listed atoms, in the order given.
+
+    Unlike :func:`subdiagonalize_atoms`, atoms not in ``a`` get no block,
+    so the rotation spans only the orbitals of ``a``.
+
+    Parameters
+    ----------
+    calc : gpaw.GPAW
+    h_ii, s_ii : ndarray, shape (n, n)
+    a : sequence of int
+        Atoms to treat.
+    """
     from scipy.linalg import block_diag
 
     U_mm = []
@@ -120,7 +178,22 @@ def subdiagonalize_blocks(calc, h_ii, s_ii, a=None):
     return U_mm, e_aj
 
 
-def get_bf_centers(atoms, basis=None):
+def get_bf_centers(atoms: Any, basis: Optional[dict] = None) -> NDArray[np.float64]:
+    """Position of every orbital, the position of its atom.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        With a GPAW calculator attached, or without one (then the
+        ``basis`` sets, default ``'dzp'``, give the orbital counts).
+    basis : dict, optional
+        ``{symbol: basis-set name}``.
+
+    Returns
+    -------
+    centers : ndarray, shape (n_orb, 3)
+        In Å.
+    """
 
     from ase.calculators.singlepoint import SinglePointCalculator
     from gpaw.setup import types2atomtypes
@@ -140,8 +213,19 @@ def get_bf_centers(atoms, basis=None):
     return np.array(pos_ic)
 
 
-def sum_bf_atom(calc, X_i, n_a=0):
-    """Sum basis functions on the same atom."""
+def sum_bf_atom(calc: Any, X_i: NDArray, n_a: int = 0) -> NDArray:
+    """Sum an orbital-resolved quantity over the orbitals of each atom.
+
+    For example orbital occupations to atomic charges, or a PDOS to an
+    atom-resolved DOS.
+
+    Parameters
+    ----------
+    calc : gpaw.GPAW
+    X_i : ndarray, shape (n_orb,)
+    n_a : int, default 0
+        Number of atoms to include; all if 0.
+    """
     if n_a == 0:
         n_a = len(calc.atoms)
     X_a = np.zeros(n_a, dtype=X_i.dtype)
@@ -153,11 +237,28 @@ def sum_bf_atom(calc, X_i, n_a=0):
     return X_a
 
 
-def flatten(iterables):
+def flatten(iterables: Iterable[Iterable[Any]]) -> Iterator[Any]:
+    """Elements of nested iterables, one level deep.
+
+    Parameters
+    ----------
+    iterables : iterable of iterable
+    """
     return (elem for iterable in iterables for elem in iterable)
 
 
-def get_U1(bfs_m, bfs_i, c_MM=None, apply=False):
+def get_U1(bfs_m: Any, bfs_i: Any, c_MM: Optional[NDArray] = None, apply: bool = False) -> NDArray:
+    """Reordering that puts the active orbitals last, see :func:`qtpyt.lo.tools.get_U1`.
+
+    Parameters
+    ----------
+    bfs_m, bfs_i : ndarray of int
+        Active and remaining orbitals.
+    c_MM : ndarray, optional
+        Rotation whose columns are reordered.
+    apply : bool, default False
+        Overwrite ``bfs_m`` and ``bfs_i`` with their new positions.
+    """
     nbf = len(bfs_m) + len(bfs_i)
     if c_MM is None:
         c_MM = np.eye(nbf)
@@ -171,7 +272,15 @@ def get_U1(bfs_m, bfs_i, c_MM=None, apply=False):
     return U1
 
 
-def get_U2(s1_MM, bfs_m, bfs_i):
+def get_U2(s1_MM: NDArray, bfs_m: Sequence[int], bfs_i: Sequence[int]) -> NDArray:
+    """Rotation that makes the remaining orbitals orthogonal to the active ones, see :func:`qtpyt.lo.tools.get_U2`.
+
+    Parameters
+    ----------
+    s1_MM : ndarray, shape (n, n)
+        Overlap, with the active orbitals last.
+    bfs_m, bfs_i : sequence of int
+    """
     s_mm = get_subspace(s1_MM, bfs_m)
     s_mi = s1_MM.take(bfs_m, axis=0).take(bfs_i, axis=1)
     U_mi = -la.inv(s_mm).dot(s_mi)
@@ -180,7 +289,14 @@ def get_U2(s1_MM, bfs_m, bfs_i):
     return U2
 
 
-def get_mm_ii_im(h_MM, s_MM, bfs_m, bfs_i):
+def get_mm_ii_im(h_MM: NDArray, s_MM: NDArray, bfs_m: Sequence[int], bfs_i: Sequence[int]) -> Tuple[Tuple[NDArray, NDArray], Tuple[NDArray, NDArray], Tuple[NDArray, NDArray]]:
+    """Blocks on the active orbitals, on the rest, and between them, see :func:`qtpyt.lo.tools.split_subspaces`.
+
+    Parameters
+    ----------
+    h_MM, s_MM : ndarray, shape (n, n)
+    bfs_m, bfs_i : sequence of int
+    """
     h_ii = get_subspace(h_MM, bfs_i)
     s_ii = get_subspace(s_MM, bfs_i)
     h_mm = get_subspace(h_MM, bfs_m)
@@ -191,8 +307,22 @@ def get_mm_ii_im(h_MM, s_MM, bfs_m, bfs_i):
 
 
 def extract_orthogonal_subspaces(
-    h_MM, s_MM, bfs_m, bfs_i, c_MM=None, orthogonal=True, apply=True
-):
+    h_MM: NDArray, s_MM: NDArray, bfs_m: Any, bfs_i: Any, c_MM: Optional[NDArray] = None, orthogonal: bool = True, apply: bool = True
+) -> Any:
+    """Split into an active subspace and the rest, see :func:`qtpyt.lo.tools.extract_orthogonal_subspaces`.
+
+    Parameters
+    ----------
+    h_MM, s_MM : ndarray, shape (n, n)
+    bfs_m, bfs_i : ndarray of int
+        Active and remaining orbitals, overwritten with their new positions.
+    c_MM : ndarray, optional
+        Rotation applied first.
+    orthogonal : bool, default True
+        Make the rest orthogonal to the active subspace.
+    apply : bool, default True
+        Return the blocks; with ``False`` return the rotation only.
+    """
     U1 = get_U1(bfs_m, bfs_i, c_MM, apply=True)  # Modifies bfs_m, bfs_i
     h1_MM = rotate_matrix(h_MM, U1)
     s1_MM = rotate_matrix(s_MM, U1)
@@ -209,10 +339,20 @@ def extract_orthogonal_subspaces(
     return get_mm_ii_im(h2_MM, s2_MM, bfs_m, bfs_i)
 
 
-def get_orthogonal_subspaces(calc, h_MM, s_MM, a=None, cutoff=np.inf, orthogonal=True):
-    """Split matrix in hybridization and active spaces.
-       Active space contains orbital(s) of atom(s) a with
-       abs(energy) < cutoff"""
+def get_orthogonal_subspaces(calc: Any, h_MM: NDArray, s_MM: NDArray, a: Any = None, cutoff: float = np.inf, orthogonal: bool = True) -> Any:
+    r"""Active subspace of local orbitals on chosen atoms, see :func:`qtpyt.lo.tools.get_orthogonal_subspaces`.
+
+    Parameters
+    ----------
+    calc : gpaw.GPAW
+    h_MM, s_MM : ndarray, shape (n, n)
+    a : int or sequence of int
+        Atoms that host the active orbitals.
+    cutoff : float, default inf
+        Keep local orbitals with :math:`|\varepsilon| < \mathrm{cutoff}`.
+    orthogonal : bool, default True
+        Make the rest orthogonal to the active subspace.
+    """
     nbf = len(h_MM)
     c_MM, e_aj = subdiagonalize_atoms(calc, h_MM, s_MM, a)
     bfs_imp = get_bfs_indices(calc, a)
@@ -223,7 +363,14 @@ def get_orthogonal_subspaces(calc, h_MM, s_MM, a=None, cutoff=np.inf, orthogonal
     return extract_orthogonal_subspaces(h_MM, s_MM, bfs_m, bfs_i, c_MM, orthogonal)
 
 
-def get_ll_mm_rr(H, S, nbf_l, nbf_m, nbf_r):
+def get_ll_mm_rr(H: NDArray, S: NDArray, nbf_l: int, nbf_m: int, nbf_r: int) -> Tuple[Tuple[NDArray, NDArray], Tuple[NDArray, NDArray], Tuple[NDArray, NDArray]]:
+    """Central block and its couplings, see :func:`qtpyt.lo.tools.get_ll_mm_rr`.
+
+    Parameters
+    ----------
+    H, S : ndarray, shape (n, n)
+    nbf_l, nbf_m, nbf_r : int
+    """
     rng_l = list(range(nbf_l))
     rng_m = list(range(nbf_l, nbf_l + nbf_m))
     rng_r = list(range(nbf_l + nbf_m, nbf_l + nbf_m + nbf_r))
@@ -236,7 +383,19 @@ def get_ll_mm_rr(H, S, nbf_l, nbf_m, nbf_r):
     return (h_lm, s_lm), (h_mm, s_mm), (h_rm, s_rm)
 
 
-def get_lead_orthogonal(greenfunction):
+def get_lead_orthogonal(greenfunction: Any) -> Tuple[Tuple[NDArray, NDArray], Tuple[NDArray, NDArray], Tuple[NDArray, NDArray]]:
+    """Device and lead blocks after making the lead layers orthogonal to the device.
+
+    Assembles lead–device–lead :math:`H` and :math:`S`, removes the overlap
+    between the device and each lead principal layer, and returns the
+    blocks of :func:`get_ll_mm_rr`.
+
+    Parameters
+    ----------
+    greenfunction : GreenFunction
+        Device Green's function whose first two self-energies are the leads,
+        with attributes ``h_ii``, ``s_ii``, ``h_im``, ``s_im``.
+    """
     s_ll = greenfunction.selfenergies[0].s_ii
     s_rr = greenfunction.selfenergies[1].s_ii
     h_ll = greenfunction.selfenergies[0].h_ii

@@ -1,18 +1,49 @@
+r"""Real-space supercell matrices from matrices at transverse k-points."""
+from __future__ import annotations
+
+from typing import Optional, Sequence
+
+from numpy.typing import NDArray
+
 import numpy as np
 
 from ._unfold_numba import _bloch_unfold
 
 
-def bloch_unfold(A, kpts, N, out=None):
-    """Unfold matrices evaluated at k-points onto a supercell.
+def bloch_unfold(A: NDArray[np.complex128], kpts: NDArray[np.float64], N: Sequence[int], out: Optional[NDArray[np.complex128]] = None) -> NDArray[np.complex128]:
+    r"""Real-space matrix of a supercell of ``N`` small cells, from the small cell's k-space matrices.
 
-    The supercell (SC) consists of N repetitions of a smaller 
-    building block described by the k-matrices. At the moment,
-    unfolding is implemented only along two directions. This means
-    that even though N is compsed of (3,) integers, only 2 of them
-    can be greater than 1. Finally, note that the last dimension 
-    != 1 is used in the innermost unfolding.
-    
+    A periodic supercell built from :math:`N_1 N_2` copies of a small cell
+    has the same physics as the small cell sampled at :math:`N_1 N_2`
+    k-points. This inverts the Bloch transform: block :math:`(I, J)` of the
+    supercell matrix is
+
+    .. math::
+
+        A_{IJ} = \frac{1}{N_k}\sum_{\mathbf k} A(\mathbf k)\,
+        e^{2\pi i\,\mathbf k\cdot(\mathbf R_J - \mathbf R_I)}.
+
+    Parameters
+    ----------
+    A : ndarray of complex128, shape (n_k, n, m)
+        Matrices of the small cell at each k-point.
+    kpts : ndarray, shape (n_k, 3)
+        k-points, in units of the reciprocal lattice vectors of the small
+        cell.
+    N : sequence of three int
+        Repetitions of the small cell. At most two may exceed 1; the last
+        of these runs fastest in the supercell orbital order.
+    out : ndarray of complex128, optional
+        Array for the result.
+
+    Returns
+    -------
+    A_sc : ndarray, shape (N_1 N_2 n, N_1 N_2 m)
+
+    Raises
+    ------
+    NotImplementedError
+        If all three entries of ``N`` exceed 1.
     """
 
     assert A.dtype == complex, "Input arrays must be complex128!"

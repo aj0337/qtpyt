@@ -1,14 +1,38 @@
+r"""Inverse of a 2×2 block matrix by the Schur complement."""
+from __future__ import annotations
+
+from typing import List, Sequence
+
+from numpy.typing import NDArray
+
 import numpy as np
 from numpy.core.defchararray import array
 from numpy.core.shape_base import block
 
 
-def block_inv(M):
-    """"Block inverision of 2x2 matrix using Shur complement.
-    
-    Args:
-        M : (np.array(object), tuple, list), shape 2x2
-            Block matrix to invert.
+def block_inv(M: Sequence[Sequence[NDArray]]) -> List[List[NDArray]]:
+    r"""Blocks of the inverse of :math:`\begin{pmatrix} A & B \\ C & D \end{pmatrix}`.
+
+    With the Schur complement :math:`\mathcal S = D - C A^{-1} B`,
+
+    .. math::
+
+        M^{-1} = \begin{pmatrix}
+        A^{-1} + A^{-1} B \mathcal S^{-1} C A^{-1} & -A^{-1} B \mathcal S^{-1} \\
+        -\mathcal S^{-1} C A^{-1} & \mathcal S^{-1}
+        \end{pmatrix}.
+
+    Applied to :math:`G^{-1}`, the lower-right block is the Green's function
+    of the second region dressed by the first.
+
+    Parameters
+    ----------
+    M : 2×2 nested sequence of ndarray
+        Blocks ``[[A, B], [C, D]]``, with ``A`` and ``D`` square.
+
+    Returns
+    -------
+    Minv : 2×2 nested list of ndarray
     """
     Minv = [[None, None], [None, None]]
     A = M[0][0]
@@ -28,7 +52,8 @@ def block_inv(M):
     return Minv
 
 
-def test_block_inv():
+def test_block_inv() -> None:
+    """Check :func:`block_inv` against a dense inverse of a random matrix."""
     mat = np.random.random((4, 4))
     M = [[mat[:2, :2], mat[:2, 2:]], [mat[2:, :2], mat[2:, 2:]]]
     computed = np.block(block_inv(M))

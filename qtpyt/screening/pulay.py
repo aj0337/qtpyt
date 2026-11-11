@@ -1,4 +1,9 @@
-from typing import Any
+r"""Pulay (DIIS) mixing to reach self-consistency of the density matrix."""
+from __future__ import annotations
+
+from typing import Any, Callable, Optional
+
+from numpy.typing import NDArray
 
 import numpy as np
 from numba import njit, prange
@@ -31,47 +36,34 @@ def _mix(alpha, coeff, inp, out, new):
 
 
 class ArrayList:
-    """Array list to store mixing iterations.
-    
-    Args:
-        N : # iterations to store
-        
-    Internal:
-        array : array of shape = (N,) + shape
-            Arrays in the N-th previous iterations.
-        indices : list
-            Indices that order the internal array.
-            Example
-                array[indices] = order array from oldest to newest.
-        i = current index
+    """Ring buffer that keeps the last ``N`` arrays of an iteration.
 
-    Example:
-        In [2]: a = ArrayList(2)
-        In [3]: a.append(np.ones(3))
-        In [6]: a.append(np.ones(3)*2)
-        In [9]: a.array
-        Out[9]: 
-        array([[1., 1., 1.],
-               [2., 2., 2.]])
-        In [10]: a.append(np.ones(3)*3)
-        In [13]: a.array
-        Out[13]: 
-        array([[3., 3., 3.],
-               [2., 2., 2.]])
-        In [13]: a.array[a.indices]
-        Out[13]: 
-        array([[2., 2., 2.],
-               [3., 3., 3.]])
+    Parameters
+    ----------
+    N : int
+        Number of arrays kept.
 
+    Attributes
+    ----------
+    array : ndarray, shape (N, ...)
+        Storage; ``array[indices]`` lists the kept arrays from oldest to
+        newest.
+    indices : list of int
     """
 
-    def __init__(self, N) -> None:
+    def __init__(self, N: int) -> None:
         self.array = None
         self.N = N
         self.indices = []
         self.i = -1
 
-    def append(self, X):
+    def append(self, X: NDArray) -> None:
+        """Store ``X``, dropping the oldest array when full.
+
+        Parameters
+        ----------
+        X : ndarray
+        """
         if self.array is None:
             self.array = np.empty((self.N,) + X.shape, X.dtype)
         self.i += 1
@@ -209,20 +201,29 @@ class ArrayList:
 
 
 class PulayMixer:
-    """Pulay mixing scheme.
+    r"""Pulay (DIIS) mixing of density matrices for a self-consistent loop.
 
-         __
-         \
-    new =     (1-alpha) coeff[n] inp[n] + alpha coeff[n] out[n]
-         /_ n  
-         
-    Args:
-        alpha : float
-            mixing factor
-        N : # of iterations to store
+    Each step maps an input density matrix :math:`D^\mathrm{in}` to an output
+    :math:`D^\mathrm{out}`. The next input combines the last ``N`` steps,
+
+    .. math::
+
+        D^\mathrm{new} = \sum_n c_n \left[D^\mathrm{in}_n
+        + \alpha (D^\mathrm{out}_n - D^\mathrm{in}_n)\right],
+        \qquad \sum_n c_n = 1,
+
+    with :math:`c_n` chosen to minimize the norm of the combined residual.
+    Residuals are measured on the diagonal (orbital occupations) only.
+
+    Parameters
+    ----------
+    alpha : float, default 0.4
+        Fraction of the output mixed in.
+    N : int, default 3
+        Number of previous steps kept.
     """
 
-    def __init__(self, alpha=0.4, N=3):
+    def __init__(self, alpha: float = 0.4, N: int = 3) -> None:
         self.alpha = alpha
         self.N = N
         self.inp = []  # ArrayList(N)
@@ -231,7 +232,8 @@ class PulayMixer:
         self.coeff = None
 
     @property
-    def eps(self):
+    def eps(self) -> float:
+        """Squared norm of the latest residual (infinite before the first step)."""
         if not hasattr(self, "A"):
             return np.inf
         return self.A[-2, -2]
@@ -241,12 +243,22 @@ class PulayMixer:
         if len(G_list) > self.N:
             G_list.pop(0)
 
-    def append_input(self, D: np.ndarray):
-        """Append input."""
+    def append_input(self, D: np.ndarray) -> None:
+        """Record an input density matrix.
+
+        Parameters
+        ----------
+        D : ndarray
+        """
         self._append(self.inp, D)
 
-    def append_output(self, D: np.ndarray):
-        """Append output."""
+    def append_output(self, D: np.ndarray) -> None:
+        """Record the output density matrix of the latest input and its residual.
+
+        Parameters
+        ----------
+        D : ndarray
+        """
         self._append(self.out, D)
         # Compute inner product with all previous (and current) residuals.
         N = len(self.out)
@@ -264,8 +276,8 @@ class PulayMixer:
             for err in self.err[:-1]:
                 err.pop(0)  # Discard column
 
-    def compute_new_coeff(self):
-        """Compute Pulay's mixing coefficients."""
+    def compute_new_coeff(self) -> NDArray[np.float64]:
+        r"""Mixing coefficients :math:`c_n` that minimize the residual norm with :math:`\sum_n c_n = 1`."""
         from random import random
 
         N = len(self.out)
@@ -291,8 +303,14 @@ class PulayMixer:
         self.A = A
         return self.coeff
 
-    def compute_new_input(self, new=None):
-        """Mix previous inputs and outputs and produce new input."""
+    def compute_new_input(self, new: Optional[NDArray] = None) -> NDArray:
+        """Next input density matrix from the stored steps.
+
+        Parameters
+        ----------
+        new : ndarray, optional
+            Array for the result.
+        """
         if new is None:
             new = np.zeros_like(self.inp[0])
         else:
@@ -307,7 +325,29 @@ class PulayMixer:
             )
         return new
 
-    def __call__(self, func, D_inp, tol=1e-5, max_iter=100, max_outer=1, **kwargs) -> Any:
+    def __call__(self, func: Callable, D_inp: NDArray, tol: float = 1e-5, max_iter: int = 100, max_outer: int = 1, **kwargs: Any) -> Any:
+        """Iterate ``D -> func(D)`` with Pulay mixing until the residual falls below ``tol``.
+
+        Parameters
+        ----------
+        func : callable
+            ``func(D, **kwargs)`` returns the output density matrix for input ``D``.
+        D_inp : ndarray
+            Starting density matrix.
+        tol : float, default 1e-5
+            Convergence threshold on :attr:`eps`.
+        max_iter : int, default 100
+            Steps per cycle.
+        max_outer : int, default 1
+            Cycles; each restarts the mixing history.
+        **kwargs
+            Passed to ``func``.
+
+        Returns
+        -------
+        D : ndarray
+            Last input density matrix.
+        """
         iter_outer = 0
         while self.eps > tol and iter_outer < max_outer:
             iter = 0

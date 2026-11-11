@@ -1,6 +1,23 @@
+r"""Lesser, greater and retarded components of two-time functions, and conversions between them.
+
+In a steady state every Green's function or self-energy depends on one
+time difference, or one energy. The Langreth components are related by
+
+.. math::
+
+    X^r(t) = \theta(t)\,[X^>(t) - X^<(t)], \qquad
+    X^> - X^< = X^r - X^a,
+
+and these relations convert between the pair stored in memory and the
+pair a calculation needs next.
+"""
+from __future__ import annotations
+
 from functools import wraps
 from math import pi
-from typing import Any
+from typing import Any, Callable, Optional
+
+from numpy.typing import NDArray
 
 import numpy as np
 
@@ -21,12 +38,29 @@ from qtpyt.screening.tools import (
 
 
 def get_retarded_from_lesser_and_greater(
-    less, great, energies, ret=None, oversample=10
-):
-    """
-    Calculates the retarded function from
+    less: NDArray, great: NDArray, energies: NDArray[np.float64], ret: Optional[NDArray] = None, oversample: int = 10
+) -> NDArray[np.complex128]:
+    r"""Retarded component in energy from the lesser and greater components in time.
 
-    r(t) = theta(t)[ >(t) - <(t) ]
+    Applies :math:`X^r(t) = \theta(t)[X^>(t) - X^<(t)]` and transforms back
+    to energy on a zero-padded grid, with end-point corrections.
+
+    Parameters
+    ----------
+    less, great : ndarray, shape (n_E, n_q)
+        :math:`X^<(t)` and :math:`X^>(t)`, sampled at the times conjugate to
+        ``energies``.
+    energies : ndarray, shape (n_E,)
+        Uniform energy grid.
+    ret : ndarray, shape (n_E, n_q), optional
+        Array for the result.
+    oversample : int, default 10
+        Zero-padding factor; the padded length is the next power of two.
+
+    Returns
+    -------
+    ret : ndarray, shape (n_E, n_q)
+        :math:`X^r(E)`.
     """
     extenergies = get_extended_energies(energies, oversample)
     fourierdata = get_fourier_data(len(extenergies))
@@ -66,8 +100,13 @@ def get_retarded_from_lesser_and_greater(
     return ret
 
 
-def assert_domain(*domains):
-    """Assert transformation is supported for domain(s)"""
+def assert_domain(*domains: Optional[str]) -> Callable:
+    """Decorator: allow a method only when the arrays are in one of ``domains``.
+
+    Parameters
+    ----------
+    *domains : {'e', 't', None}
+    """
 
     def inner(f):
         @wraps(f)
@@ -82,8 +121,13 @@ def assert_domain(*domains):
     return inner
 
 
-def change_domain(domain):
-    """Change domain at output."""
+def change_domain(domain: str) -> Callable:
+    """Decorator: mark the arrays as being in ``domain`` after the method runs.
+
+    Parameters
+    ----------
+    domain : {'e', 't'}
+    """
 
     def inner(f):
         @wraps(f)
@@ -97,8 +141,14 @@ def change_domain(domain):
     return inner
 
 
-def swap_domain(f):
-    """Swap domain from/to energy/time."""
+def swap_domain(f: Callable) -> Callable:
+    """Decorator: switch the recorded domain between energy and time after the method runs.
+
+    Parameters
+    ----------
+    f : callable
+        The method to wrap.
+    """
 
     @wraps(f)
     def wrapper(self, *a, **k):
@@ -111,57 +161,38 @@ def swap_domain(f):
 
 
 class LangrethPair(GridDesc):
-    """Descriptor of a pair of distributed arrays following Langreth 
-    transformation rules.
+    r"""Two Langreth components of a function, stored on a distributed energy or time grid.
 
-    The langreth pairs are contained in a dictionary specifying
-    the type as a keyword. An array can represent one of the
-    
-        l : lesser
-        g : greater
-        r : retarded
-        a : advanced
-    
-    components of the inheriting class. This structure is thought
-    so that a class can re-use effectively the allocated memory and
-    keep track of what the arrays acutally represent. Additionally,
-    the pair can leave in either of the three domains
-    
-        None : uninitialized
-        e : energy
-        t : time
-        
-    Note that both arrays will always live in the same domain.
-    
-    Attributes:
-        convert_domain : converts the domain from/to energy
-            or time.
-        
-                x(e), y(e) <</>> x(t), y (t)
-            
-        convert_retared : converts the retarded component to
-            the lesser one. This method requires the current 
-            domain to be energy.
-            
-                l(e), g(e) << r(e), g(e)
-            
-        convert_lesser : converts the lesser and greater components
-            given in time domain to the retarded and greater ones
-            in energy domain.
+    Two components fully determine the third, so only two arrays are kept,
+    in :attr:`arrays` under the keys ``'l'`` (lesser), ``'g'`` (greater),
+    ``'r'`` (retarded) or ``'a'`` (advanced). The conversion methods reuse
+    the same memory and relabel the keys, and :attr:`domain` records whether
+    the arrays hold energies (``'e'``), times (``'t'``) or nothing yet
+    (``None``). A conversion called in the wrong domain raises an
+    ``AssertionError``.
 
-                r(e), g(e) << l(t), g(t)
-        
-    A call to these method will always trigger a domain consistency
-    check. If the domain is invalid for the given transformation
-    an assertation error is raised. At the end of the transformation
-    the domain is consistently changed to the correct one.
+    Parameters
+    ----------
+    energies : ndarray, shape (n_E,)
+        Uniform energy grid, same unit as the Hamiltonian.
+    no : int
+        Matrix size: orbitals for one-particle functions, pair orbitals for
+        two-particle ones.
+    dtype : data-type, default complex
+    oversample : int, default 10
+        Zero-padding factor for the time–energy transforms.
 
+    Attributes
+    ----------
+    arrays : dict of str to ndarray
+        The two stored components, each of shape ``(n_E_local, no, no)``.
+    domain : {None, 'e', 't'}
     """
 
     _valid_keys = set(["l", "g", "r", "a"])
     _valid_domains = set([None, "e", "t"])
 
-    def __init__(self, energies, no, dtype=complex, oversample=10) -> None:
+    def __init__(self, energies: NDArray[np.float64], no: int, dtype: Any = complex, oversample: int = 10) -> None:
         super().__init__(energies, no, dtype)
         self.arrays = {
             "l": self.empty_aligned_orbs(),
@@ -172,8 +203,8 @@ class LangrethPair(GridDesc):
 
     @assert_domain("e", "t")
     @swap_domain
-    def convert_domain(self):
-        """Convert pair from/to energy/time."""
+    def convert_domain(self) -> None:
+        """Fourier transform both components between energy and time."""
         # x(t), y(t) <</>> x(e), y(e)
         # _fft = fft if self.domain == "e" else ifft
         # if self.domain == "e":
@@ -191,8 +222,8 @@ class LangrethPair(GridDesc):
             self.collect_orbitals(A, a)
 
     @assert_domain("e")
-    def convert_retarded(self):
-        """Convert retarded to lesser."""
+    def convert_retarded(self) -> None:
+        r"""Replace the retarded component by the lesser one, :math:`X^< = X^> - X^r + X^a`, in energy."""
         # l(e) << r(e)
         # l(e) = g(e) - r(e) + a(e)
         lesser_from_retarded(self.arrays["r"], self.arrays["g"])
@@ -200,8 +231,21 @@ class LangrethPair(GridDesc):
 
     @assert_domain("t")
     @change_domain("e")
-    def convert_less_and_great_to_ret(self, zero_index=None, override="l"):
-        """Convert lessert to retarded."""
+    def convert_less_and_great_to_ret(self, zero_index: Optional[int] = None, override: str = "l") -> None:
+        r"""Retarded component in energy from lesser and greater components in time.
+
+        Uses :func:`get_retarded_from_lesser_and_greater`. Afterwards the
+        arrays hold the retarded component and the one not overwritten, in
+        energy.
+
+        Parameters
+        ----------
+        zero_index : int, optional
+            Grid index of :math:`t = 0`; defaults to the index of the energy
+            closest to zero.
+        override : {'l', 'g'}, default 'l'
+            Which component's memory receives the retarded component.
+        """
         # r(e), g(e) << l(t), g(t)
         # r(t) = theta(t) [ <(t) - >(t) ]
         if zero_index is None:

@@ -1,3 +1,22 @@
+r"""Fourier integrals between time and energy with end-point corrections.
+
+The convention is
+
+.. math::
+
+    F(\omega) = \int dt\, e^{i\omega t} f(t), \qquad
+    f(t) = \frac{1}{2\pi} \int d\omega\, e^{-i\omega t} F(\omega).
+
+A plain FFT treats the samples as periodic; the end-point corrections of
+Numerical Recipes (section 13.9) make it a fourth-order accurate
+integral of a function sampled on a finite interval.
+"""
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
+from numpy.typing import NDArray
+
 from math import cos, sin
 
 import numpy as np
@@ -16,18 +35,29 @@ and the inverse by::
 """
 
 
-def fourier_integral(f, delta, N, sign=1, data=None):
-    """ The fourier transform of a function represented by the array
-    f. len(f) does not have to be an integer power of two!
-    NOTE: Assumes that the fouriertransform is along axis 0.
-    WARNING: this methods leads to a kink in the transform in the middle of
-             the data range! It should only be used if the data is
-             oversampled (zero-padded) by at least a factor 2.
+def fourier_integral(f: NDArray[np.complex128], delta: float, N: int, sign: int = 1, data: Optional[Tuple[NDArray, NDArray]] = None) -> NDArray[np.complex128]:
+    r"""Fourier integral of sampled data along the first axis, with end-point corrections.
 
-    ``delta`` is the increment of the tranform axis.
+    The transform shows a kink in the middle of the output range, so the
+    input must be zero-padded by at least a factor of two.
 
-    sign=1 indicates an inverse fft ( return F(w) from f(t) )
-    sign=-1 indicates a forward fft ( return f(t) from F(w) )
+    Parameters
+    ----------
+    f : ndarray of complex128, shape (N,)
+        Samples of :math:`f(t)` (``sign=1``) or :math:`F(\omega)` (``sign=-1``).
+    delta : float
+        Grid spacing of the input.
+    N : int
+        Transform length.
+    sign : {1, -1}, default 1
+        ``1`` gives :math:`F(\omega)` from :math:`f(t)`; ``-1`` gives
+        :math:`f(t)` from :math:`F(\omega)`, including the :math:`1/2\pi`.
+    data : tuple of ndarray, optional
+        Precomputed :func:`get_fourier_data` for this ``N``.
+
+    Returns
+    -------
+    F : ndarray of complex128, shape (N,)
     """
     # N = len(f)
     if data is None:
@@ -65,7 +95,13 @@ def _dftshift(f, W, cor, endpts, sign):
         f[i] = W[i] * N * f[i] + shift
 
 
-def get_fourier_data(N):
+def get_fourier_data(N: int) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+    """End-point correction weights for a transform of length ``N``, in FFT order.
+
+    Parameters
+    ----------
+    N : int
+    """
     theta = np.arange(-N / 2, N / 2) * 2 * np.pi / N
     theta = np.fft.ifftshift(theta)
     return dftcor(theta)  # end point corrections
@@ -73,11 +109,21 @@ def get_fourier_data(N):
     # return np.fft.ifftshift(W, axes=[0]), np.fft.ifftshift(cor, axes=[0])
 
 
-def dftcor(theta):
-    """ End point corrections for FFT
-    
-    Numerical Recipies in C, Chap. 13.9
-    Formula 13.9.14
+def dftcor(theta: NDArray[np.float64]) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+    r"""End-point correction weights :math:`W(\theta)` and :math:`\alpha_j(\theta)` for Fourier integrals.
+
+    Numerical Recipes in C, section 13.9, eq. 13.9.14; a series expansion
+    is used for small :math:`\theta`.
+
+    Parameters
+    ----------
+    theta : ndarray of float64
+        :math:`\omega\,\Delta t` at each output point.
+
+    Returns
+    -------
+    W : ndarray, shape (n,)
+    cor : ndarray, shape (n, 4)
     """
     theta_small = 0.01
     N = len(theta)

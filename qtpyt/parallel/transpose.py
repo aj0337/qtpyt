@@ -1,3 +1,8 @@
+"""In-place transposition of matrices, without a second copy in memory."""
+from __future__ import annotations
+
+from numpy.typing import NDArray
+
 import numpy as np
 from numba import boolean, njit
 
@@ -5,24 +10,19 @@ from numba import boolean, njit
 
 
 @njit(["f8[:,::1](f8[:,::1])", "c16[:,::1](c16[:,::1])"], cache=True)
-def transpose(a):
-    """Transpose a matrix inplace.
-    
-    Example:
-    
-    In [1]: a = np.arange(8).reshape(2,4).astype(float)
+def transpose(a: NDArray) -> NDArray:
+    """Transpose a C-ordered matrix in its own memory, by following permutation cycles.
 
-    In [2]: a
-    Out[2]: 
-            array([[0., 1., 2., 3.],
-                [4., 5., 6., 7.]])
+    Parameters
+    ----------
+    a : ndarray of float64 or complex128, shape (n, m), C-ordered
+        Overwritten: its memory then holds the transpose in C order.
 
-    In [3]: transpose(a)
-
-    In [4]: a
-    Out[4]: 
-            array([[0., 4., 1., 5.],
-                [2., 6., 3., 7.]])
+    Returns
+    -------
+    aT : ndarray, shape (m, n)
+        View of the same memory with the transposed shape. ``a`` itself
+        keeps its old shape, so read the result from the return value.
     """
     n, m = a.shape
     a = a.reshape(-1)

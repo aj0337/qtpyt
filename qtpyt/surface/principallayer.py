@@ -1,5 +1,19 @@
+r"""Leads and surfaces that are periodic in the directions transverse to transport.
+
+A wide electrode is a supercell of many transverse repetitions of a small
+cell. Its Hamiltonian is block diagonal in the transverse Bloch momentum
+:math:`\mathbf k_\perp`, so the surface Green's function is computed for the
+small cell at each :math:`\mathbf k_\perp` and then unfolded into the
+real-space supercell (:func:`~qtpyt.surface.unfold.bloch_unfold`). This is
+much cheaper than decimating the supercell directly, and gives a
+self-energy for a device whose transverse size matches the supercell.
+"""
+from __future__ import annotations
+
 from itertools import chain
-from typing import Any
+from typing import Any, Optional, Sequence, Tuple
+
+from numpy.typing import NDArray
 
 import numpy as np
 from numba import njit, prange
@@ -15,33 +29,36 @@ from .unfold import bloch_unfold
 
 
 class PrincipalLayer(BaseGreenFunction):
-    """Principal Layer (PL) Green's function.
-    
-    Allows to compute a surface Green's Function for a supercell (SC)
-    composed of a repeating principal layer (PL). The inputs are
-    converged Hamiltonians and Overlaps for the PL evaluated at 
-    tranverse k-points.
-    
+    r"""Surface Green's function of a semi-infinite lead that is periodic transversally.
+
+    For each transverse k-point the surface Green's function of the small
+    principal layer is found by Sancho–Rubio decimation
+    (:class:`~qtpyt.base.leads.SanchoRubio`), and the results are unfolded
+    into the real-space supercell of ``Nr`` transverse repetitions.
+
+    Parameters
+    ----------
+    kpts : ndarray, shape (n_k, 3)
+        Transverse k-points, in units of the reciprocal lattice vectors.
+    hs_kii : tuple of ndarray, shape (n_k, n, n)
+        ``(H_k, S_k)`` of the principal layer at each k-point.
+    hs_kij : tuple of ndarray, shape (n_k, n, n)
+        ``(H_k, S_k)`` coupling from one principal layer to the next, at
+        each k-point.
+    Nr : tuple of three int, optional
+        Transverse repetitions of the small cell in the supercell. Defaults
+        to the number of distinct k-point coordinates along each axis. A
+        k-mesh denser than ``Nr`` samples the transverse zone more finely
+        than the supercell size alone would.
+    eta : float, default 1e-5
+        Broadening, see :class:`~qtpyt.base.greenfunction.BaseGreenFunction`.
+
+    Notes
+    -----
+    Unfolding works for supercells repeated along at most two directions.
     """
 
-    def __init__(self, kpts, hs_kii, hs_kij, Nr=None, eta=1e-5):
-        """
-        Args:
-            kpts : np.ndarray (shape = (# of k-points, 3))
-                tranverse k-points.
-            hs_kii : (tuple, list)
-                pointers to onsite Hamiltonians and Overlaps (at kpts).
-            hs_kij : (tuple, list)
-                pointers to coupling Hamiltonians and Overlaps (at kpts).
-            Nr : tuple (size = (3,))
-                # of transverse PLs. Can be smaller than the actual
-                # of transverse k-points!
-        
-        NOTE: If Nr is not provided, the number of real space repetitions
-        is deduced by the unique k-point values in each dimension. It can
-        be useful to sample the BZ with a k-mesh bigger than the realspace
-        supercell size.
-        """
+    def __init__(self, kpts: NDArray[np.float64], hs_kii: Tuple[NDArray, NDArray], hs_kij: Tuple[NDArray, NDArray], Nr: Optional[Sequence[int]] = None, eta: float = 1e-5) -> None:
 
         self.kpts = kpts
         self.Nr = Nr or self.N_k
@@ -70,17 +87,23 @@ class PrincipalLayer(BaseGreenFunction):
         super().__setattr__(name, value)
 
     @property
-    def N_k(self):
-        """# of transverse k-points"""
+    def N_k(self) -> NDArray[np.int_]:
+        """Number of distinct k-point coordinates along each axis."""
         return np.array([len(set(self.kpts[:, i])) for i in range(3)])
 
     @property
-    def Nk(self):
-        """# of parallel repetitions."""
+    def Nk(self) -> int:
+        """Number of transverse k-points."""
         return self.kpts.shape[0]
 
-    def retarded(self, energy):
-        """Get retarded Green function at specified energy."""
+    def retarded(self, energy: float) -> NDArray[np.complex128]:
+        r"""Surface Green's function :math:`g_s(E)` of the lead in the real-space supercell.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as the Hamiltonian.
+        """
         if energy != self.energy:
             self.energy = energy
             for k in range(self.Nk):
@@ -88,31 +111,46 @@ class PrincipalLayer(BaseGreenFunction):
             self.bloch_unfold(self.G_kii, self.G)
         return self.G
 
-    def bloch_unfold(self, A, out=None):
-        """Unfold to supercell matrix.
-        
-        Args:
-            A : Matrices at transverse k-points.
-            out : (optional) supercell matrix 
+    def bloch_unfold(self, A: NDArray[np.complex128], out: Optional[NDArray[np.complex128]] = None) -> NDArray[np.complex128]:
+        """Real-space supercell matrix from matrices at the transverse k-points.
+
+        Parameters
+        ----------
+        A : ndarray, shape (n_k, n, n)
+            Matrices at each k-point.
+        out : ndarray, optional
+            Array for the result.
+
+        See Also
+        --------
+        qtpyt.surface.unfold.bloch_unfold
         """
         return bloch_unfold(A, self.kpts, self.Nr, out)
 
 
 class PrincipalSelfEnergy(BaseSelfEnergy):
-    """Principal Layer (PL) Self-energy.
-    
-    Allows to compute a surface self-energy for a supercell (SC)
-    composed of a repeating principal layer (PL). The inputs are
-    converged Hamiltonians and Overlaps for the PL evaluated at 
-    tranverse k-points.
-    
+    r"""Self-energy of a transversally periodic lead on the device.
 
-    TODO :: order return!
+    Like :class:`~qtpyt.base.leads.LeadSelfEnergy`, with the lead's surface
+    Green's function from :class:`PrincipalLayer`. The coupling to the
+    device is the principal-layer coupling, unfolded to the supercell, so
+    the device edge must be a copy of a supercell principal layer with
+    atoms in the same order.
+
+    Parameters
+    ----------
+    kpts, hs_kii, Nr, eta
+        See :class:`PrincipalLayer`.
+    hs_kij : tuple of ndarray, shape (n_k, n, n)
+        Coupling from a principal layer to the next one on its right, for
+        both leads; transposed internally for ``id="right"``.
+    id : {'left', 'right'}, default 'left'
+        Which side of the device the lead is on.
     """
 
     ids = ["left", "right"]
 
-    def __init__(self, kpts, hs_kii, hs_kij, Nr=None, id="left", eta=1e-5):
+    def __init__(self, kpts: NDArray[np.float64], hs_kii: Tuple[NDArray, NDArray], hs_kij: Tuple[NDArray, NDArray], Nr: Optional[Sequence[int]] = None, id: str = "left", eta: float = 1e-5) -> None:
 
         assert id in self.ids, f"Invalid id. Choose between {self.ids}"
 
@@ -129,9 +167,40 @@ class PrincipalSelfEnergy(BaseSelfEnergy):
 
 
 class SurfaceGreenFunction(BaseGreenFunction):
-    """The surface Green's function."""
+    r"""Green's function of a slab of ``Nd`` principal layers inside an infinite crystal.
 
-    def __init__(self, kpts, hs_kii, hs_kij, Nr, direction="x", eta=1e-5):
+    The crystal continues on both sides along the transport direction and
+    is periodic transversally. The slab Green's function equals that of the
+    perfect crystal restricted to the slab, so a defect or adsorbate placed
+    in the slab can be embedded through :class:`SurfaceSelfEnergy`.
+
+    Parameters
+    ----------
+    kpts : ndarray, shape (n_k, 3)
+        Transverse k-points.
+    hs_kii : tuple of ndarray, shape (n_k, n, n)
+        ``(H_k, S_k)`` of the principal layer.
+    hs_kij : tuple of ndarray, shape (n_k, n, n)
+        ``(H_k, S_k)`` coupling to the next principal layer.
+    Nr : tuple of three int
+        Repetitions of the principal layer: along the transport direction
+        this is the slab thickness ``Nd``, along the others the transverse
+        supercell.
+    direction : {'x', 'y', 'z'}, default 'x'
+        Transport direction.
+    eta : float, default 1e-5
+        Broadening, see :class:`~qtpyt.base.greenfunction.BaseGreenFunction`.
+
+    Notes
+    -----
+    At each k-point the slab is attached to a left and a right
+    semi-infinite lead of the same crystal. The first diagonal block is
+    :math:`G_{00} = (zS - H - \Sigma_L - \Sigma_R)^{-1}`, and the rest of the
+    slab follows from translation invariance, :math:`G_{ij}` depending only
+    on :math:`i - j`.
+    """
+
+    def __init__(self, kpts: NDArray[np.float64], hs_kii: Tuple[NDArray, NDArray], hs_kij: Tuple[NDArray, NDArray], Nr: Sequence[int], direction: str = "x", eta: float = 1e-5) -> None:
 
         self.Nr = Nr
         self.kpts = kpts
@@ -179,30 +248,47 @@ class SurfaceGreenFunction(BaseGreenFunction):
         super().__setattr__(name, value)
 
     @property
-    def Nk(self):
-        """# of parallel repetitions."""
+    def Nk(self) -> int:
+        """Number of transverse k-points."""
         return self.kpts.shape[0]
 
-    def bloch_unfold(self, A, out=None):
-        """Unfold k-points to supercell matrix.
-        
-        Args:
-            A : Matrices at transverse k-points.
-            out : (optional) supercell matrix 
+    def bloch_unfold(self, A: NDArray[np.complex128], out: Optional[NDArray[np.complex128]] = None) -> NDArray[np.complex128]:
+        """Real-space transverse supercell matrix from matrices at the k-points.
+
+        Parameters
+        ----------
+        A : ndarray, shape (n_k, m, m)
+            Matrices at each k-point.
+        out : ndarray, optional
+            Array for the result.
         """
         return bloch_unfold(A, self.kpts, self.Nr_t, out)
 
-    def unfold_periodic(self, A, B, C, out=None):
-        """Expand tridiagonal toeplitz and bloch unfold.
-        
+    def unfold_periodic(self, A: NDArray, B: NDArray, C: NDArray, out: Optional[NDArray] = None) -> NDArray[np.complex128]:
+        """Matrix of the slab from the principal-layer blocks, in the real-space supercell.
+
+        Parameters
+        ----------
+        A, B, C : ndarray, shape (n_k, n, n)
+            Diagonal, upper and lower principal-layer blocks at each k-point.
+        out : ndarray, optional
+            Array for the result.
+
+        See Also
+        --------
+        qtpyt.surface.expand.tritoeplz_expand
         """
         for k in range(self.Nk):
             tritoeplz_expand(self.Nd, A[k], B[k], C[k], self.work_kMM[k])
         return self.bloch_unfold(self.work_kMM, out)
 
-    def retarded(self, energy):
-        """The retarded green's function.
-        
+    def retarded(self, energy: float) -> NDArray[np.complex128]:
+        r"""Green's function :math:`G^r(E)` of the slab inside the infinite crystal.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as the Hamiltonian.
         """
         if energy != self.energy:
             self.energy = energy
@@ -244,8 +330,29 @@ def _fill_sigma_full(z, H, S, Ginv, Sigma):
             Sigma[i, j] = z * S[i, j] - H[i, j] - Ginv[i, j]
 
 
-def fill_sigma(z, H, S, Ginv, Sigma=None, indices=None):
-    """Solve Dyson equation for boundary self-energy."""
+def fill_sigma(z: complex, H: NDArray, S: NDArray, Ginv: NDArray, Sigma: Optional[NDArray] = None, indices: Optional[NDArray[np.int64]] = None) -> NDArray[np.complex128]:
+    r"""Self-energy from the Dyson equation, :math:`\Sigma = zS - H - G^{-1}`.
+
+    Given the Green's function of a region embedded in its surroundings,
+    this recovers the self-energy that the surroundings exert on it.
+
+    Parameters
+    ----------
+    z : complex
+        Complex energy :math:`E + i\eta`.
+    H, S : ndarray, shape (n, n)
+        Hamiltonian and overlap of the region, complex.
+    Ginv : ndarray, shape (n, n)
+        Inverse of the embedded Green's function.
+    Sigma : ndarray, optional
+        Array for the result.
+    indices : ndarray of int64, optional
+        Restrict the result to these orbitals.
+
+    Returns
+    -------
+    Sigma : ndarray
+    """
     if Sigma is None:
         Sigma = np.empty_like(Ginv)
     if indices is None:
@@ -256,10 +363,24 @@ def fill_sigma(z, H, S, Ginv, Sigma=None, indices=None):
 
 
 class SurfaceSelfEnergy(BaseSelfEnergy):
-    """The surface selfenergy."""
+    r"""Self-energy of an infinite crystal on a slab of its own principal layers.
+
+    Embeds a region of ``Nd`` principal layers into the surrounding perfect
+    crystal: :math:`\Sigma = zS - H - G^{-1}` with :math:`G` from
+    :class:`SurfaceGreenFunction`. Replace the slab Hamiltonian by that of
+    a defective slab and add this self-energy to study a defect in an
+    otherwise perfect crystal.
+
+    Parameters
+    ----------
+    kpts, hs_kii, hs_kij, Nr, direction, eta
+        See :class:`SurfaceGreenFunction`.
+    indices : sequence of int, optional
+        Keep only these orbitals of the slab, see :attr:`indices`.
+    """
 
     def __init__(
-        self, kpts, hs_kii, hs_kij, Nr, indices=None, direction="x", eta=1e-5
+        self, kpts: NDArray[np.float64], hs_kii: Tuple[NDArray, NDArray], hs_kij: Tuple[NDArray, NDArray], Nr: Sequence[int], indices: Optional[Sequence[int]] = None, direction: str = "x", eta: float = 1e-5
     ) -> None:
 
         self.gf = SurfaceGreenFunction(kpts, hs_kii, hs_kij, Nr, direction, eta)
@@ -268,11 +389,11 @@ class SurfaceSelfEnergy(BaseSelfEnergy):
         self.indices = indices
 
     @property
-    def indices(self):
-        """Set subset of orbitals for the self-energy.
-        
-        Useful when coupling to a structure with missing
-        surface atoms, e.g. defects.
+    def indices(self) -> Optional[Sequence[int]]:
+        """Orbitals of the slab the self-energy is restricted to, or ``None`` for all.
+
+        Use it when the embedded structure lacks some atoms of the perfect
+        slab, for example at a vacancy.
         """
         return self._indices
 
@@ -285,12 +406,23 @@ class SurfaceSelfEnergy(BaseSelfEnergy):
         self.Sigma = np.empty(shape, complex)
         self._indices = indices
 
-    def take(self, indices):
-        """Take subset of basis function for self-energy."""
+    def take(self, indices: Optional[Sequence[int]]) -> None:
+        """Restrict the self-energy to a subset of orbitals, see :attr:`indices`.
+
+        Parameters
+        ----------
+        indices : sequence of int or None
+        """
         self.indices = indices
 
-    def retarded(self, energy):
-        """The retarded selfenergy."""
+    def retarded(self, energy: float) -> NDArray[np.complex128]:
+        r"""Retarded self-energy :math:`\Sigma(E)` on the slab orbitals in :attr:`indices`.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as the Hamiltonian.
+        """
         if energy != self.energy:
             self.energy = energy
             Ginv = np.linalg.inv(self.gf.retarded(energy))
@@ -298,9 +430,27 @@ class SurfaceSelfEnergy(BaseSelfEnergy):
         return self.Sigma
 
 
-def extract_leads_from_surface(sf: SurfaceSelfEnergy, bpl: Basis, bcc: Basis):
-    """Extract left and right leads of SurfaceSelfEnergy.
-    
+def extract_leads_from_surface(sf: SurfaceSelfEnergy, bpl: Basis, bcc: Basis) -> Tuple[PrincipalSelfEnergy, PrincipalSelfEnergy]:
+    """Left and right lead self-energies of a surface self-energy, coupled to a device.
+
+    Reuses the decimated leads of ``sf`` and reorders the couplings so that
+    they attach to the matching atoms of the device.
+
+    Parameters
+    ----------
+    sf : SurfaceSelfEnergy
+        Surface self-energy whose leads are extracted.
+    bpl : Basis
+        Basis of one principal layer (one transverse cell).
+    bcc : Basis
+        Basis of the device. Its atoms at the left and right edges must
+        coincide in position with the first and last principal layers of
+        the slab.
+
+    Returns
+    -------
+    SL, SR : PrincipalSelfEnergy
+        Left and right lead self-energies on the full device orbital space.
     """
     from scipy.spatial.distance import cdist
 

@@ -1,4 +1,28 @@
+r"""Block tridiagonal matrices.
+
+A device built from principal layers that couple only to their nearest
+neighbours has a Hamiltonian with non-zero blocks only on the diagonal and
+next to it,
+
+.. math::
+
+    H = \begin{pmatrix}
+    H_{00} & H_{01} &        &        \\
+    H_{10} & H_{11} & H_{12} &        \\
+           & H_{21} & H_{22} & \ddots \\
+           &        & \ddots & \ddots
+    \end{pmatrix}.
+
+Storing only these blocks keeps memory linear in the device length
+instead of quadratic, and lets the Green's function be computed block by
+block (:mod:`qtpyt.block_tridiag.recursive`).
+"""
+from __future__ import annotations
+
 from itertools import accumulate, product
+from typing import List, Optional, Sequence, Tuple
+
+from numpy.typing import NDArray
 
 import numpy as np
 from qtpyt import xp
@@ -58,25 +82,42 @@ class _BTBuffer:
         return self.N
 
 
-def empty_buffer(N):
+def empty_buffer(N: int) -> _BTBuffer:
+    """Container for the blocks of an ``N``-block tridiagonal matrix, all unset.
+
+    Parameters
+    ----------
+    N : int
+        Number of diagonal blocks.
+    """
     return _BTBuffer(N)
 
 
 class BTMatrix(_BTBuffer):
-    """Helper class for Block Tridiagonal matrices.
-    
-    Args:
-        m_qii : (list(xp.ndarray), len=N)
-            List of block matrices on the diagonal. 
+    """Block tridiagonal matrix stored as its diagonal and first off-diagonal blocks.
 
-        m_qij : (list(xp.ndarray), len=N-1)
-            List of block matrices on the upper diagonal. 
+    Blocks are read and written as ``M[q, p]`` with ``|q - p| <= 1``.
+    Element-wise ``+``, ``-`` and ``*`` with another :class:`BTMatrix` or a
+    scalar act block by block.
 
-        m_qji : (list(xp.ndarray), len=N-1)
-            List of block matrices on the lower diagonal. 
+    Parameters
+    ----------
+    m_qii : list of ndarray, length N
+        Diagonal blocks :math:`M_{qq}`, square, of size :math:`n_q`.
+    m_qij : list of ndarray, length N - 1
+        Upper blocks :math:`M_{q,q+1}`, shape :math:`(n_q, n_{q+1})`.
+    m_qji : list of ndarray, length N - 1
+        Lower blocks :math:`M_{q+1,q}`, shape :math:`(n_{q+1}, n_q)`.
+
+    Attributes
+    ----------
+    N : int
+        Number of diagonal blocks.
+    shape : tuple of int
+        Shape ``(n_orb, n_orb)`` of the full matrix.
     """
 
-    def __init__(self, m_qii, m_qij, m_qji):
+    def __init__(self, m_qii: List[NDArray], m_qij: List[NDArray], m_qji: List[NDArray]) -> None:
         super().__init__(len(m_qii))
         self.m_qii = m_qii
         self.m_qij = m_qij
@@ -90,7 +131,8 @@ class BTMatrix(_BTBuffer):
         self.shape = 2 * (sum(shapes),)
         self._nodes = np.fromiter(accumulate([0] + shapes), "i8")
 
-    def todense(self):
+    def todense(self) -> NDArray:
+        """The full ``(n_orb, n_orb)`` matrix, zeros outside the tridiagonal blocks."""
         order = "C" if self.m_qii[0].flags.c_contiguous else "F"
         M = xp.zeros(2 * (self.m,), dtype=self.m_qii[0].dtype, order=order)
         M[self.ix_(0, 0)] = self.m_qii[0]
@@ -100,7 +142,16 @@ class BTMatrix(_BTBuffer):
             M[self.ix_(q, q)] = self.m_qii[q]
         return M
 
-    def ix_(self, i, j=None):
+    def ix_(self, i: int, j: Optional[int] = None) -> Tuple[slice, slice]:
+        """Slices that select block ``(i, j)`` in the full matrix.
+
+        Parameters
+        ----------
+        i : int
+            Row block.
+        j : int, optional
+            Column block, ``i`` if omitted.
+        """
         if j is None:
             j = i
         il = self._nodes[i]
@@ -114,13 +165,26 @@ class BTMatrix(_BTBuffer):
         for a, b in zip(self, other):
             allclose(a, b)
 
-    def diagonal(self):
+    def diagonal(self) -> NDArray:
+        """Diagonal of the full matrix, of length ``n_orb``."""
         return xp.concatenate([self.m_qii[q].diagonal() for q in range(self.N)])
 
-    def trace(self):
+    def trace(self) -> complex:
+        """Trace of the full matrix."""
         return xp.sum([self.m_qii[q].trace() for q in range(self.N)])
 
-    def dot(self, other):
+    def dot(self, other: "BTMatrix") -> "BTMatrix":
+        """Diagonal blocks of the product with another block tridiagonal matrix.
+
+        Only the blocks :math:`(AB)_{qq}` are computed; the off-diagonal
+        blocks of the result are ``None``. This is what traces and local
+        densities need.
+
+        Parameters
+        ----------
+        other : BTMatrix
+            Right factor, with the same block sizes.
+        """
         out = empty_buffer(self.N)
         out.m_qii[0] = xp.dot(self.m_qii[0], other.m_qii[0])
         for q in range(self.N - 1):
@@ -129,16 +193,30 @@ class BTMatrix(_BTBuffer):
             out.m_qii[q + 1] += xp.dot(self.m_qji[q], other.m_qij[q])
         return BTMatrix(out.m_qii, out.m_qij, out.m_qji)
 
-    def copy(self):
+    def copy(self) -> "BTMatrix":
+        """Copy of the matrix with copied blocks."""
         return BTMatrix(
             [m_qii.copy() for m_qii in self.m_qii],
             [m_qij.copy() for m_qij in self.m_qij],
             [m_qji.copy() for m_qji in self.m_qji],
         )
 
-    def rotate(self, rot):
-        """Rotate self given a list of block diagonal rotations 
-        (one for each block or None, e.g. rot = [None, None, u22, u33, ..])."""
+    def rotate(self, rot: Sequence[Optional[NDArray]]) -> "BTMatrix":
+        r"""Change of basis :math:`U^\dagger M U` with a block diagonal :math:`U`.
+
+        Use it to rotate selected layers into another basis (for example
+        localized orbitals) while keeping the block tridiagonal structure.
+
+        Parameters
+        ----------
+        rot : sequence of ndarray or None, length N
+            :math:`U_{qq}` for each block; ``None`` leaves the block
+            unchanged.
+
+        Returns
+        -------
+        M_rot : BTMatrix
+        """
         # [UT_00*H_00*U_00  UT_00*H_01*U_11        0               0         ]
         # [                                                                  ]
         # [UT_11*H_10*U_00  UT_11*H_11*U_11  UT_11*H_12*U_22        0        ]
@@ -170,7 +248,17 @@ class BTMatrix(_BTBuffer):
         out.m_qii[q] = dots(uT1, self.m_qii[q], rot[q])
         return BTMatrix(out.m_qii, out.m_qij, out.m_qji)
 
-    def dotdiag(self, other):
+    def dotdiag(self, other: "BTMatrix") -> NDArray:
+        """Diagonal of the product with another block tridiagonal matrix.
+
+        Exact, because a diagonal element of the product involves only
+        tridiagonal blocks. With ``other`` the overlap :math:`S` this gives
+        the orbital-resolved :math:`(GS)_{ii}`.
+
+        Parameters
+        ----------
+        other : BTMatrix
+        """
         out = [
             xp.zeros(self.m_qii[q].shape[0], self.m_qii[q].dtype) for q in range(self.N)
         ]
@@ -181,7 +269,13 @@ class BTMatrix(_BTBuffer):
             dotdiag(self.m_qji[q], other.m_qij[q], out[q + 1])
         return xp.concatenate(out)
 
-    def dottrace(self, other):
+    def dottrace(self, other: "BTMatrix") -> complex:
+        r"""Trace of the product :math:`\operatorname{Tr}[AB]` with another block tridiagonal matrix.
+
+        Parameters
+        ----------
+        other : BTMatrix
+        """
         out = complex(0.0)
         out = dottrace(self.m_qii[0], other.m_qii[0], out)
         for q in range(self.N - 1):

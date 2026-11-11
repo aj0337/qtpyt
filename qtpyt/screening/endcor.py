@@ -1,8 +1,27 @@
+r"""Fourier integrals with end-point corrections; an alternative implementation of :mod:`qtpyt.screening.fourier`."""
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
+from numpy.typing import NDArray
+
 import numpy as np
 from qtpyt.screening import fft, ifft
 
 
-def dftint(f, N, sign=1, Wcor=None):
+def dftint(f: NDArray, N: int, sign: int = 1, Wcor: Optional[Tuple[NDArray, NDArray]] = None) -> NDArray:
+    """End-point corrected Fourier integral of ``f``, without the grid-spacing factor.
+
+    Parameters
+    ----------
+    f : ndarray
+    N : int
+        Transform length.
+    sign : {1, -1}, default 1
+        Direction, as in :func:`qtpyt.screening.fourier.fourier_integral`.
+    Wcor : tuple of ndarray, optional
+        Precomputed :func:`get_dftcor` for this ``N``.
+    """
     if Wcor is None:
         Wcor = get_dftcor(N)
     W, cor = Wcor
@@ -18,7 +37,13 @@ def dftint(f, N, sign=1, Wcor=None):
     return F
 
 
-def get_dftcor(N):
+def get_dftcor(N: int) -> Tuple[NDArray, NDArray]:
+    """End-point correction weights for a transform of length ``N``, centred order.
+
+    Parameters
+    ----------
+    N : int
+    """
     theta = np.arange(-N / 2, N / 2) * 2 * np.pi / N
     W, cor = dftcor(theta)  # end point corrections
     # FFTshift end point corrections
@@ -26,11 +51,18 @@ def get_dftcor(N):
     # return np.fft.ifftshift(W, axes=[0]), np.fft.ifftshift(cor, axes=[0])
 
 
-def dftcor(theta):
-    """ End point corrections for FFT
-    
-    Numerical Recipies in C, Chap. 13.9
-    Formula 13.9.14
+def dftcor(theta: NDArray[np.float64]) -> Tuple[NDArray, NDArray]:
+    """End-point correction weights, Numerical Recipes in C, section 13.9, eq. 13.9.14.
+
+    Parameters
+    ----------
+    theta : ndarray of float64
+        Angle at each output point.
+
+    Returns
+    -------
+    W : ndarray, shape (n,)
+    cor : ndarray, shape (n, 4)
     """
     theta_small = 5.0e-2
     N = len(theta)

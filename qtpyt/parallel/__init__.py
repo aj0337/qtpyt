@@ -1,3 +1,9 @@
+"""MPI and thread setup for calculations distributed over an energy grid.
+
+Importing this package creates ``comm`` (``MPI.COMM_WORLD``) and sets the
+number of Numba, MKL and OpenBLAS threads to ``OMP_NUM_THREADS``, or to the
+number of CPUs when it is unset. Requires ``mpi4py``.
+"""
 import os
 import sys
 from warnings import warn

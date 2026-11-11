@@ -1,4 +1,23 @@
+r"""Local (bond) currents: where the electrons flow inside the device.
+
+The transmission says how much current passes; the bond currents say
+along which bonds it passes. They are computed from the partial spectral
+function :math:`A_\alpha = G^r \Gamma_\alpha G^a` of one lead (see
+:meth:`~qtpyt.base.greenfunction.GreenFunction.get_spectrals`) and the
+Hamiltonian, at a single energy. Plotted as arrows on the structure, they
+show current paths, loops and interference [1]_.
+
+References
+----------
+.. [1] S. Sanz et al., "Crossed graphene nanoribbons as beam splitters and
+   mirrors for electron quantum optics".
+"""
+from __future__ import annotations
+
 from itertools import accumulate
+from typing import Any, List, Optional, Sequence, Tuple
+
+from numpy.typing import NDArray
 import numpy as np
 from numba import njit
 from functools import singledispatch
@@ -76,15 +95,62 @@ def _orbital_current_btd(A, H, index_i, index_j):
     return _orbital_current(A_ij, H_ij, index_i, index_j, A_ji, H_ji)
 
 
-def orbital_current(A, H, index_i, index_j):
-    """Dispatcher."""
+def orbital_current(A: Any, H: Any, index_i: Sequence[int], index_j: Sequence[int]) -> NDArray[np.float64]:
+    r"""Current between each orbital of one set and each orbital of another.
+
+    Parameters
+    ----------
+    A : ndarray or BTMatrix, shape (n_orb, n_orb)
+        Partial spectral function :math:`A_\alpha(E)` of one lead.
+    H : ndarray or BTMatrix, shape (n_orb, n_orb)
+        Hamiltonian of the device, of the same kind as ``A``.
+    index_i, index_j : sequence of int
+        Orbital indices of the two sets, usually the orbitals of two
+        bonded atoms. For block tridiagonal matrices each set must lie
+        within one block, and the two blocks must be equal or adjacent.
+
+    Returns
+    -------
+    J_ij : ndarray, shape (len(index_i), len(index_j))
+        Orbital currents, without the prefactor :math:`e/h`.
+
+    Notes
+    -----
+    .. math::
+
+        J_{ij} = \operatorname{Im}\left[H^\dagger_{ji} A_{ij} - H_{ij} A^\dagger_{ji}\right].
+
+    Only :math:`H` enters, not :math:`H - ES`, so the overlap between
+    orbitals is neglected. The sign gives the direction of flow between
+    the two orbitals.
+    """
     if isinstance(A, (BTMatrix, _BTBuffer)):
         return _orbital_current_btd(A, H, index_i, index_j)
     else:
         return _orbital_current(A, H, index_i, index_j, A, H)
 
 
-def bond_current(A, H, bfs_ai, nlists):
+def bond_current(A: Any, H: Any, bfs_ai: Sequence[Sequence[int]], nlists: Sequence[Sequence[int]]) -> List[List[float]]:
+    r"""Current along every bond, the orbital currents summed over the orbitals of the two atoms.
+
+    Parameters
+    ----------
+    A : ndarray or BTMatrix
+        Partial spectral function :math:`A_\alpha(E)` of one lead.
+    H : ndarray or BTMatrix
+        Hamiltonian of the device.
+    bfs_ai : sequence of sequence of int
+        ``bfs_ai[a]`` holds the orbital indices of atom ``a``.
+    nlists : sequence of sequence of int
+        ``nlists[a]`` holds the atoms bonded to atom ``a``, as from
+        :func:`~qtpyt.basis.get_neighbors`.
+
+    Returns
+    -------
+    J_aa : list of list of float
+        ``J_aa[a][n]`` is the current from atom ``a`` to its ``n``-th
+        neighbour ``nlists[a][n]``, see :func:`orbital_current`.
+    """
     J_aa = [[None for _ in nlist] for nlist in nlists]
     for a0, nlist in enumerate(nlists):
         index_i = bfs_ai[a0]
@@ -94,11 +160,32 @@ def bond_current(A, H, bfs_ai, nlists):
     return J_aa
 
 
-def quiver_plot(atoms, J_aa, nlists, **kwargs):
-    """ Get arrows info
-    X - origins
-    U - vectors with legth of corresponding bond
-    W - weigths
+def quiver_plot(atoms: Any, J_aa: Sequence[Sequence[float]], nlists: Sequence[Sequence[int]], **kwargs: Any) -> Tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Arrows for drawing bond currents with :func:`matplotlib.pyplot.quiver`.
+
+    Every bond gives one arrow pointing in the direction of the current.
+    A bond with negative current gets an arrow starting at the bond
+    midpoint and pointing back towards the first atom.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        The structure the currents were computed for.
+    J_aa : sequence of sequence of float
+        Bond currents from :func:`bond_current`.
+    nlists : sequence of sequence of int
+        Neighbour lists used for ``J_aa``.
+    **kwargs
+        Ignored.
+
+    Returns
+    -------
+    X : ndarray, shape (n_bonds, 3)
+        Arrow origins, in Å.
+    U : ndarray, shape (n_bonds, 3)
+        Arrow vectors, as long as the bond.
+    W : ndarray, shape (n_bonds,)
+        Magnitude of each bond current.
     """
     X = []
     U = []
@@ -124,7 +211,24 @@ def quiver_plot(atoms, J_aa, nlists, **kwargs):
     return X, U, W
 
 
-def normalize_weigths(W, normalize=False, vmin=None, vmax=None, clip=False):
+def normalize_weigths(W: NDArray[np.float64], normalize: bool = False, vmin: Optional[float] = None, vmax: Optional[float] = None, clip: bool = False) -> NDArray[np.float64]:
+    """Rescale bond-current magnitudes for a colour map.
+
+    Parameters
+    ----------
+    W : ndarray
+        Bond-current magnitudes.
+    normalize : bool, default False
+        Map ``W`` linearly onto [0, 1].
+    vmin, vmax : float, optional
+        Clipping limits, used when ``clip`` is set.
+    clip : bool, default False
+        Clip ``W`` to ``[vmin, vmax]`` after normalizing.
+
+    Returns
+    -------
+    W : ndarray
+    """
     if normalize:
         W = (W - W.min()) / (W.max() - W.min())
     if clip:
@@ -133,7 +237,26 @@ def normalize_weigths(W, normalize=False, vmin=None, vmax=None, clip=False):
 
 
 class DensityCurrent(object):
-    def __init__(self, gf, basis, indices=None):
+    """Bond currents of a device at one energy, one map per lead.
+
+    Parameters
+    ----------
+    gf : GreenFunction
+        Green's function of the device with leads attached, providing
+        :meth:`~qtpyt.base.greenfunction.GreenFunction.get_spectrals`.
+    basis : Basis
+        Orbital basis of the device.
+    indices : sequence of int, optional
+        Atoms to include. All atoms if omitted.
+
+    Notes
+    -----
+    Bonds are found from covalent radii with periodic boundaries switched
+    off, so no bond crosses the cell boundary. Adjust them with
+    :meth:`add_neighbors` and :meth:`pop_neighbors`.
+    """
+
+    def __init__(self, gf: Any, basis: Any, indices: Optional[Sequence[int]] = None) -> None:
         self.gf = gf
         self.indices = indices or np.arange(len(basis.atoms))
         self.atoms = basis.atoms[self.indices]
@@ -141,7 +264,8 @@ class DensityCurrent(object):
         self.energy = None
         self._set_nlists()
 
-    def __call__(self, energy):
+    def __call__(self, energy: float) -> List[List[List[float]]]:
+        """Bond currents at energy :math:`E` for each lead, see :func:`bond_current`."""
         # Spectral functions
         if energy != self.energy:
             gf = self.gf
@@ -160,24 +284,63 @@ class DensityCurrent(object):
         self.nlists = get_neighbors(atoms)
         atoms.set_pbc(pbc)
 
-    def add_neighbors(self, index, neighbors):
+    def add_neighbors(self, index: int, neighbors: Sequence[int]) -> None:
+        """Add bonds from atom ``index`` to the atoms ``neighbors``.
+
+        Parameters
+        ----------
+        index : int
+            Atom index, within the selected atoms.
+        neighbors : sequence of int
+            Atoms to bond to it.
+        """
         self.nlists[index] = np.insert(self.nlists[index], 0, neighbors)
 
-    def pop_neighbors(self, index, neighbors):
+    def pop_neighbors(self, index: int, neighbors: Sequence[int]) -> None:
+        """Remove bonds of atom ``index``.
+
+        Parameters
+        ----------
+        index : int
+            Atom index, within the selected atoms.
+        neighbors : sequence of int
+            Positions in ``nlists[index]`` of the bonds to remove.
+        """
         self.nlists[index] = np.delete(self.nlists[index], neighbors)
 
     def display(
         self,
-        J_aa,
-        nlists,
-        projection="2d",
-        plane="xy",
-        scale=2,
-        normalize=True,
-        vmin=None,
-        vmax=None,
-        clip=False,
-    ):
+        J_aa: Sequence[Sequence[float]],
+        nlists: Sequence[Sequence[int]],
+        projection: str = "2d",
+        plane: str = "xy",
+        scale: float = 2,
+        normalize: bool = True,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        clip: bool = False,
+    ) -> Any:
+        """Draw bond currents as arrows coloured by magnitude.
+
+        Parameters
+        ----------
+        J_aa : sequence of sequence of float
+            Bond currents of one lead.
+        nlists : sequence of sequence of int
+            Neighbour lists used for ``J_aa``.
+        projection : {'2d', '3d'}, default '2d'
+            Draw in a plane or in 3D.
+        plane : str, default 'xy'
+            Plane of the 2D drawing.
+        scale : float, default 2
+            Cell length in Å per inch of figure size.
+        normalize, vmin, vmax, clip
+            Colour scaling, see :func:`normalize_weigths`.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+        """
 
         from mpl_toolkits.mplot3d import Axes3D
         from matplotlib import pyplot as plt

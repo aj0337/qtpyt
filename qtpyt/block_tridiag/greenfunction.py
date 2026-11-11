@@ -1,5 +1,19 @@
+r"""Green's function of a long device stored as a block tridiagonal matrix.
+
+For devices with many orbitals the dense inverse of
+:class:`~qtpyt.base.greenfunction.GreenFunction` becomes too costly. When
+the device splits into layers that couple only to their neighbours (see
+:mod:`~qtpyt.block_tridiag.graph_partition`), only the blocks of
+:math:`G^r` that observables need are computed, recursively, layer by
+layer. Cost and memory grow linearly with the number of layers.
+"""
+from __future__ import annotations
+
 from math import pi
-from typing import Any
+from typing import Any, List, Sequence, Tuple, Union
+
+import numpy as np
+from numpy.typing import NDArray
 
 from qtpyt import xp
 from qtpyt.base._kernels import get_lambda
@@ -9,49 +23,61 @@ from qtpyt.block_tridiag.btmatrix import BTMatrix, empty_buffer
 
 
 class GreenFunction(BaseGreenFunction):
-    """Block Tridiagonal Green's Function.
+    r"""Retarded Green's function of a layered device attached to leads.
 
-    Allows to compute observables for a scattering region
-    embedded in an environment described by selfenergies.
-    The Hamiltonian and the Overlap are given as two lists
-    containing the diagonal and upper diagonal block-matrices.
+    Same physics as :class:`~qtpyt.base.greenfunction.GreenFunction`, with
+    :math:`H`, :math:`S` and :math:`G` stored as
+    :class:`~qtpyt.block_tridiag.btmatrix.BTMatrix`. The left lead couples
+    to the first layer and the right lead to the last.
 
-    Args:
-        hs_list_ii : (list(xp.ndarray(complex, shape=(2,m,m))), len=N)
-            List of block matrices on the diagonal.
+    Parameters
+    ----------
+    hs_list_ii : list of ndarray, shape (2, n_q, n_q), length N
+        ``(H_qq, S_qq)`` of each layer, stacked.
+    hs_list_ij : list of ndarray, shape (2, n_q, n_{q+1}), length N - 1
+        ``(H_{q,q+1}, S_{q,q+1})`` coupling of each layer to the next one.
+        The lower blocks are taken as the transpose of these.
+    selfenergies : list of (int, self-energy) pairs, default []
+        ``(q, selfenergy)``: the self-energy is added to the whole diagonal
+        block of layer ``q``. Leads go on the first (``q=0``) and last
+        (``q=N-1``) layers.
+    idxleads : list of int, default [0, 1]
+        Positions of the left and right leads in ``selfenergies``. Their
+        broadenings are stored at the same positions in :attr:`gammas`, so
+        the leads must be the first two entries.
+    eta : float, default 1e-5
+        Broadening, see :class:`~qtpyt.base.greenfunction.BaseGreenFunction`.
+    mu : float, default 0.0
+        Chemical potential.
+    kt : float, default 0.0
+        Thermal energy.
+    solver : {'spectral', 'coupling', 'dyson'}, default 'spectral'
+        Recursion used to compute the parts of :math:`G` that are needed,
+        see :mod:`~qtpyt.block_tridiag.solvers`. Only ``'dyson'`` supports
+        :meth:`get_transmission` with its ``ferretti`` and ``normalize``
+        options and returns :math:`G^r` from :meth:`retarded`.
 
-                hs_list_ii[i][0] = Hamilton-block[0,0]
-                hs_list_ii[i][1] = Overlap-block[0,0]
+    Raises
+    ------
+    RuntimeError
+        If ``solver`` is not one of the available solvers.
 
-        hs_list_ii : (list(xp.ndarray(complex, shape=(2,m,m))), len=N-1)
-            List of block matrices on the upper diagonal.
-
-                hs_list_ij[i][0] = Hamilton-block[0,1]
-                hs_list_ij[i][1] = Overlap-block[0,1]
-
-        selfenergies : (list(block, indices, selfenergy))
-            List of selfenergies that couple to this Hamiltonian.
-
-                Hamiltonian[block, block][indices] << selfenergy
-
-        solver : ('str')
-            One of the solvers available in Solver given as string.
-            Used to compute selected parts of the Green's function.
-            (i.e. invert the matrix.)
-
+    Notes
+    -----
+    Setting :attr:`eta` also sets it on every attached self-energy.
     """
 
     def __init__(
         self,
-        hs_list_ii,
-        hs_list_ij,
-        selfenergies=[],
-        idxleads=[0, 1],
-        eta=1e-5,
-        mu=0.0,
-        kt=0.0,
-        solver="spectral",
-    ):
+        hs_list_ii: List[NDArray],
+        hs_list_ij: List[NDArray],
+        selfenergies: List[Tuple[int, Any]] = [],
+        idxleads: List[int] = [0, 1],
+        eta: float = 1e-5,
+        mu: float = 0.0,
+        kt: float = 0.0,
+        solver: str = "spectral",
+    ) -> None:
         Solver = solvers.__dict__.get(solver.capitalize(), None)
         if Solver is None:
             raise RuntimeError(f"Invalid solver {solver}")
@@ -92,7 +118,16 @@ class GreenFunction(BaseGreenFunction):
                 selfenergy.eta = value
         super().__setattr__(name, value)
 
-    def get_Ginv(self, energy):
+    def get_Ginv(self, energy: float) -> Any:
+        r"""Inverse Green's function :math:`zS - H - \sum_q \Sigma_q(E)` as blocks.
+
+        Also stores the lead broadenings in :attr:`gammas`.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as :attr:`H`.
+        """
         z = self.z(energy)
 
         for q, (h_ii, s_ii) in enumerate(zip(self.H.m_qii, self.S.m_qii)):
@@ -113,20 +148,91 @@ class GreenFunction(BaseGreenFunction):
 
         return self.Ginv
 
-    def get_transmission(self, energy, ferretti=False, normalize=False):
+    def get_transmission(self, energy: float, ferretti: bool = False, normalize: bool = False) -> float:
+        r"""Transmission between the two leads, computed by the solver.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as :attr:`H`.
+        ferretti : bool, default False
+            Include the vertex correction of
+            :meth:`~qtpyt.block_tridiag.solvers.Dyson.get_transmission`.
+        normalize : bool, default False
+            Divide by the number of open channels, see
+            :meth:`~qtpyt.block_tridiag.solvers.Dyson.get_transmission`.
+
+        Returns
+        -------
+        T : float
+        """
         return self.solver.get_transmission(energy, ferretti, normalize)
 
-    def get_spectrals(self, energy):
+    def get_spectrals(self, energy: float) -> Tuple[Any, Any]:
+        r"""Partial spectral functions :math:`A_L = G^r\Gamma_L G^a` and :math:`A_R = G^r\Gamma_R G^a`.
+
+        Requires the ``'spectral'`` solver.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as :attr:`H`.
+
+        Returns
+        -------
+        A_L, A_R : BTMatrix
+        """
         return self.solver.get_spectrals(energy)
 
-    def retarded(self, energy, inverse=False):
+    def retarded(self, energy: float, inverse: bool = False) -> Any:
+        r"""Block tridiagonal part of the Green's function given by the solver.
+
+        With the ``'dyson'`` solver this is :math:`G^r(E)`. With
+        ``'spectral'`` it is :math:`A_L + A_R`, see
+        :meth:`~qtpyt.block_tridiag.solvers.Spectral.get_retarded`.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as :attr:`H`.
+        inverse : bool, default False
+            Ignored.
+
+        Returns
+        -------
+        G : BTMatrix
+        """
         return self.solver.get_retarded(energy)
 
-    def get_dos(self, energy):
+    def get_dos(self, energy: float) -> float:
+        r"""Total density of states :math:`-\frac{1}{\pi}\operatorname{Im}\operatorname{Tr}[G S]`.
+
+        :math:`G` is what :meth:`retarded` returns, so this is the density of
+        states only with the ``'dyson'`` solver.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as :attr:`H`.
+        """
         G = self.solver.get_retarded(energy)
         return -1 / pi * G.dottrace(self.S).imag
 
-    def get_pdos(self, energy):
+    def get_pdos(self, energy: float) -> NDArray[np.float64]:
+        r"""Orbital-resolved density of states :math:`-\frac{1}{\pi}\operatorname{Im}(G S)_{ii}`.
+
+        Mulliken-type projection, whose sum is :meth:`get_dos`. As for
+        :meth:`get_dos`, meaningful with the ``'dyson'`` solver.
+
+        Parameters
+        ----------
+        energy : float
+            Energy :math:`E`, same unit as :attr:`H`.
+
+        Returns
+        -------
+        pdos : ndarray, shape (n_orb,)
+        """
         G = self.solver.get_retarded(energy)
         return -1 / pi * G.dotdiag(self.S).imag
 

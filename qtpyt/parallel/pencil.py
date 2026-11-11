@@ -1,3 +1,12 @@
+"""Distributed arrays split along one axis at a time, and their redistribution (pencil decomposition).
+
+Same design and interface as ``mpi4py_fft.pencil``. Used by
+:mod:`qtpyt.parallel.egrid`.
+"""
+from __future__ import annotations
+
+from typing import Any, Optional, Sequence
+
 import sys
 from itertools import count
 
@@ -75,7 +84,7 @@ class Subcomm(tuple):
     1
     """
 
-    def __new__(cls, comm, dims=None, reorder=True):
+    def __new__(cls, comm: Any, dims: Optional[Any] = None, reorder: bool = True) -> "Subcomm":
         assert not comm.Is_inter()
         if comm.Get_topology() == MPI.CART:
             assert comm.Get_dim() > 0
@@ -106,7 +115,8 @@ class Subcomm(tuple):
 
         return super(Subcomm, cls).__new__(cls, subcomm)
 
-    def destroy(self):
+    def destroy(self) -> None:
+        """Free the subcommunicators."""
         for comm in self:
             if comm:
                 comm.Free()
@@ -166,7 +176,7 @@ class Transfer(object):
 
     """
 
-    def __init__(self, comm, shape, dtype, subshapeA, axisA, subshapeB, axisB):
+    def __init__(self, comm: Any, shape: Sequence[int], dtype: Any, subshapeA: Sequence[int], axisA: int, subshapeB: Sequence[int], axisB: int) -> None:
         self.comm = comm
         self.shape = tuple(shape)
         self.dtype = dtype = np.dtype(dtype)
@@ -181,7 +191,7 @@ class Transfer(object):
         size = comm.Get_size()
         self._counts_displs = ([1] * size, [0] * size)  # XXX (None, None)
 
-    def forward(self, arrayA, arrayB):
+    def forward(self, arrayA: np.ndarray, arrayB: np.ndarray) -> None:
         """Global redistribution from arrayA to arrayB
 
         Parameters
@@ -200,7 +210,7 @@ class Transfer(object):
             [arrayB, self._counts_displsB, self._subtypesB],
         )
 
-    def backward(self, arrayB, arrayA):
+    def backward(self, arrayB: np.ndarray, arrayA: np.ndarray) -> None:
         """Global redistribution from arrayB to arrayA
 
         Parameters
@@ -220,7 +230,8 @@ class Transfer(object):
             [arrayA, self._counts_displsA, self._subtypesA],
         )
 
-    def destroy(self):
+    def destroy(self) -> None:
+        """Free the MPI datatypes."""
         for datatype in self._subtypesA:
             if datatype:
                 datatype.Free()
@@ -246,7 +257,7 @@ class Pencil(object):
     Create two pencils for a 4-dimensional array of shape (8, 8, 8, 8) using
     4 processors in total. The input pencil will be distributed in the first
     two axes, whereas the output pencil will be distributed in axes 1 and 2.
-    Note that the Subcomm instance below may distribute any axis where an entry
+    The Subcomm instance below may distribute any axis where an entry
     0 is found, whereas an entry of 1 means that this axis should not be
     distributed.
 
@@ -287,7 +298,7 @@ class Pencil(object):
     with 2 processors in each group (4 in total). One group shares axis 0 and
     the other axis 1 on the input arrays. On the output, one group shares axis
     1, whereas the other shares axis 2.
-    Note that the call ``p1 = p0.pencil(0)`` creates a new pencil (p1) that is
+    The call ``p1 = p0.pencil(0)`` creates a new pencil (p1) that is
     non-distributed in axes 0. It is, in other words, aligned in axis 0. Hence
     the first 8 in the lists with [8 4 4 8] above. The alignment is
     configurable, and ``p1 = p0.pencil(1)`` would lead to an output pencil
@@ -295,7 +306,7 @@ class Pencil(object):
 
     """
 
-    def __init__(self, subcomm, shape, axis=-1):
+    def __init__(self, subcomm: Any, shape: Sequence[int], axis: int = -1) -> None:
         assert len(shape) >= 2
         assert min(shape) >= 1
         assert -len(shape) <= axis < len(shape)
@@ -327,7 +338,7 @@ class Pencil(object):
         self.subshape = tuple(subshape)
         self.substart = tuple(substart)
 
-    def pencil(self, axis):
+    def pencil(self, axis: int) -> "Pencil":
         """Return a Pencil aligned with axis
 
         Parameters
@@ -343,7 +354,7 @@ class Pencil(object):
         subcomm[j], subcomm[i] = subcomm[i], subcomm[j]
         return Pencil(subcomm, self.shape, axis)
 
-    def transfer(self, pencil, dtype):
+    def transfer(self, pencil: "Pencil", dtype: Any) -> "Transfer":
         """Return an appropriate instance of the :class:`.Transfer` class
 
         The returned :class:`.Transfer` class is used for global redistribution

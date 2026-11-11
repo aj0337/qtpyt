@@ -1,3 +1,14 @@
+r"""Apply a matrix product at every time or energy point, on CPU or GPU.
+
+``iterate_product`` is the GPU version when ``qtpyt.xp`` is CuPy, the CPU
+version otherwise.
+"""
+from __future__ import annotations
+
+from typing import Any, Callable
+
+from numpy.typing import NDArray
+
 import numpy as np
 from qtpyt import xp
 
@@ -12,7 +23,24 @@ from qtpyt import xp
 #     return ret
 
 
-def iterate_gpu(func, x, y, out, **kwargs):
+def iterate_gpu(func: Callable, x: NDArray, y: NDArray, out: NDArray, **kwargs: Any) -> None:
+    """``out[i] = func(x[i], y[i].conj())`` for every ``i``, on the GPU.
+
+    Host-to-device copies, the product and device-to-host copies run on
+    separate CUDA streams so they overlap.
+
+    Parameters
+    ----------
+    func : callable
+        ``func(x, y, out=..., **kwargs)``, for example
+        :func:`~qtpyt.screening.products.polarization_product`.
+    x, y : ndarray, shape (n_t, ...)
+        Host arrays, ideally in pinned memory.
+    out : ndarray, shape (n_t, ...)
+        Host array for the results.
+    **kwargs
+        Passed to ``func``.
+    """
     # Note that x and y should be pinned memory
 
     x_gpu = xp.empty(x.shape[1:], x.dtype)
@@ -44,7 +72,18 @@ def iterate_gpu(func, x, y, out, **kwargs):
     end_event.synchronize()
 
 
-def iterate_cpu(func, x, y, out, **kwargs):
+def iterate_cpu(func: Callable, x: NDArray, y: NDArray, out: NDArray, **kwargs: Any) -> None:
+    """``out[i] = func(x[i], y[i].conj())`` for every ``i``.
+
+    Parameters
+    ----------
+    func : callable
+        ``func(x, y, out=..., **kwargs)``.
+    x, y : ndarray, shape (n_t, ...)
+    out : ndarray, shape (n_t, ...)
+    **kwargs
+        Passed to ``func``.
+    """
 
     for i in range(x.shape[0]):
         func(x[i], y[i].conj(), out=out[i], **kwargs)

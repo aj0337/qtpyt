@@ -1,3 +1,4 @@
+"""Build script for the compiled decimation extension ``_recursive``, for use from this directory."""
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 

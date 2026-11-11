@@ -1,3 +1,18 @@
+r"""Arrays of matrices on an energy grid, distributed over MPI ranks in two layouts.
+
+An array :math:`A_{ij}(E_k)` can be split over ranks in two ways. Split by
+energy ("orbital aligned"), each rank holds full matrices at a slice of
+energies, which suits matrix operations at fixed energy. Split by matrix
+element ("energy aligned"), each rank holds the whole energy dependence of a
+slice of elements, which suits Fourier transforms and convolutions in energy.
+:class:`DistGrid` moves arrays between the two layouts.
+"""
+from __future__ import annotations
+
+from typing import Any, Callable, Optional
+
+from numpy.typing import NDArray
+
 import itertools
 from functools import wraps
 from warnings import warn
@@ -9,8 +24,13 @@ from qtpyt.parallel.pencil import Pencil, Subcomm, _blockdist
 from qtpyt.parallel.transpose import transpose
 
 
-def check_contiguous(dist_func):
-    """Check input arrays are c_contiguous or transpose inplace."""
+def check_contiguous(dist_func: Callable) -> Callable:
+    """Decorator: make input and output arrays C-ordered, transposing Fortran-ordered ones in place.
+
+    Parameters
+    ----------
+    dist_func : callable
+    """
 
     def c_contiguous(a: np.ndarray):
         if a.flags.f_contiguous:
@@ -27,7 +47,13 @@ def check_contiguous(dist_func):
     return wrapper
 
 
-def check_serial(dist_func):
+def check_serial(dist_func: Callable) -> Callable:
+    """Decorator: with a single MPI rank, return the input (or copy it into ``b``) without communication.
+
+    Parameters
+    ----------
+    dist_func : callable
+    """
     if comm.size != 1:
         return dist_func
 
@@ -41,7 +67,14 @@ def check_serial(dist_func):
     return collect_serial
 
 
-def reshape(arg):
+def reshape(arg: str) -> Callable:
+    """Decorator factory: reshape between ``(n_E, n, n)`` and ``(n_E, n*n)`` around a redistribution.
+
+    Parameters
+    ----------
+    arg : {'input', 'output'}
+        Reshape the input array, or the output array (and back afterwards).
+    """
     def reshape_array(a, N):
         if a is not None:
             a = a.reshape(N)
@@ -80,9 +113,23 @@ def reshape(arg):
 
 
 class DistGrid:
-    """Distributed grid."""
+    """Layouts and redistribution of an ``(n_E, n, n)`` array over MPI ranks.
 
-    def __init__(self, ne, no, dtype=complex) -> None:
+    Parameters
+    ----------
+    ne : int
+        Number of energies.
+    no : int
+        Matrix size.
+    dtype : data-type, default complex
+
+    Attributes
+    ----------
+    N3D : tuple of int
+        Local shape ``(n_E_local, n, n)`` in the orbital-aligned layout.
+    """
+
+    def __init__(self, ne: int, no: int, dtype: Any = complex) -> None:
         subcomms = Subcomm(comm, [0, 1])
         # Array aligned in orbital (1-axis).
         self._pencil_aligned_orbs = Pencil(subcomms, (ne, no ** 2), 1)
@@ -102,7 +149,8 @@ class DistGrid:
         self.ne = ne
         self.no = no
 
-    def shape(self):
+    def shape(self) -> tuple:
+        """Global ``(n_E, n)``."""
         return (self.ne, self.no)
 
     def _assert_dtypes(self, *arrays: np.ndarray):
@@ -112,8 +160,19 @@ class DistGrid:
     @reshape("input")
     @check_contiguous
     @check_serial
-    def collect_energies(self, a: np.ndarray, b: np.ndarray = None):
-        """From orbital-contiguous to energy-contiguous."""
+    def collect_energies(self, a: np.ndarray, b: Optional[np.ndarray] = None) -> np.ndarray:
+        """Redistribute from the orbital-aligned to the energy-aligned layout.
+
+        Parameters
+        ----------
+        a : ndarray, shape (n_E_local, n, n)
+        b : ndarray, optional
+            Array for the result.
+
+        Returns
+        -------
+        b : ndarray, shape (n_E, n_elements_local)
+        """
         if b is None:
             b = self.empty_aligned_eners()
         self._assert_dtypes(a, b)
@@ -123,25 +182,56 @@ class DistGrid:
     @reshape("output")
     @check_contiguous
     @check_serial
-    def collect_orbitals(self, a: np.ndarray, b: np.ndarray = None):
-        """From energy-contiguous to orbital-contiguous."""
+    def collect_orbitals(self, a: np.ndarray, b: Optional[np.ndarray] = None) -> np.ndarray:
+        """Redistribute from the energy-aligned to the orbital-aligned layout.
+
+        Parameters
+        ----------
+        a : ndarray, shape (n_E, n_elements_local)
+        b : ndarray, optional
+            Array for the result.
+
+        Returns
+        -------
+        b : ndarray, shape (n_E_local, n, n)
+        """
         if b is None:
             b = self.empty_aligned_orbs().reshape(self.N2D)
         self._assert_dtypes(a, b)
         self.transfer.backward(a, b)
         return b
 
-    def empty_aligned_eners(self):
+    def empty_aligned_eners(self) -> np.ndarray:
+        """Uninitialized local array in the energy-aligned layout."""
         return np.empty(self._pencil_aligned_eners.subshape, self.dtype)
 
-    def empty_aligned_orbs(self):
+    def empty_aligned_orbs(self) -> np.ndarray:
+        """Uninitialized local array ``(n_E_local, n, n)`` in the orbital-aligned layout."""
         return np.empty(self.N3D, self.dtype)
 
 
 class GridDesc(DistGrid):
-    """Grid descriptor."""
+    """Distributed layout together with the energy grid it refers to.
 
-    def __init__(self, energies, no, dtype=complex) -> None:
+    Parameters
+    ----------
+    energies : ndarray, shape (n_E,)
+        Uniform energy grid.
+    no : int
+        Matrix size.
+    dtype : data-type, default complex
+
+    Attributes
+    ----------
+    global_energies : ndarray
+        The full grid.
+    zero_index : int
+        Index of the grid energy closest to zero.
+    de : float
+        Grid spacing.
+    """
+
+    def __init__(self, energies: NDArray[np.float64], no: int, dtype: Any = complex) -> None:
         self.global_energies = energies
         super().__init__(energies.size, no, dtype)
         # Helpers for subclasses
@@ -149,26 +239,26 @@ class GridDesc(DistGrid):
         self.de = abs(self.global_energies[1] - self.global_energies[0])
 
     @property
-    def oslice(self):
-        """Orbital slice."""
+    def oslice(self) -> slice:
+        """Matrix elements held by this rank in the energy-aligned layout."""
         substart = self._pencil_aligned_eners.substart[1]
         subshape = self._pencil_aligned_eners.subshape[1]
         return slice(substart, substart + subshape)
 
     @property
-    def eslice(self):
-        """Energy slice."""
+    def eslice(self) -> slice:
+        """Energies held by this rank in the orbital-aligned layout."""
         substart = self._pencil_aligned_orbs.substart[0]
         subshape = self._pencil_aligned_orbs.subshape[0]
         return slice(substart, substart + subshape)
 
     @property
-    def energies(self):
-        """Local energies."""
+    def energies(self) -> NDArray[np.float64]:
+        """Energies held by this rank."""
         return self.global_energies[self.eslice]
 
-    def get_eintegral_weights(self):
-        """Get energy grid weights for trapeziodal integration."""
+    def get_eintegral_weights(self) -> NDArray:
+        """Trapezoidal-rule weights of the local energies."""
         if not hasattr(self, "weights"):
             # Trapezoidal rule
             weights = np.empty(self.ne, self.dtype)
@@ -179,8 +269,21 @@ class GridDesc(DistGrid):
             self.weights /= 2.0
         return self.weights
 
-    def sum_energies(self, a: np.ndarray, pre=1.0):
-        """Sum orbital aligned array over global energies."""
+    def sum_energies(self, a: np.ndarray, pre: complex = 1.0) -> np.ndarray:
+        r"""Energy integral :math:`c\int A(E)\,dE` over the whole grid, trapezoidal rule.
+
+        Parameters
+        ----------
+        a : ndarray, shape (n_E_local, n, n)
+            Orbital-aligned array.
+        pre : complex, default 1.0
+            Prefactor :math:`c`.
+
+        Returns
+        -------
+        integral : ndarray, shape (n, n)
+            The same on every rank.
+        """
         assert a.shape == self.N3D, "Can only sum orbital aligned arrays."
         self.weights = self.get_eintegral_weights()
         a = np.tensordot(pre * self.weights, a, axes=([0], [0]))
@@ -191,8 +294,20 @@ class GridDesc(DistGrid):
         comm.Allreduce([a, a.size, mpitype], [b, mpitype], MPI.SUM)
         return b
 
-    def gather_energies(self, a: np.ndarray, root: int = 0):
-        """Gather 1D array distributed over energies to root."""
+    def gather_energies(self, a: np.ndarray, root: int = 0) -> Optional[np.ndarray]:
+        """Collect a quantity known at the local energies (such as a DOS) on one rank.
+
+        Parameters
+        ----------
+        a : ndarray, shape (n_E_local,)
+        root : int, default 0
+            Receiving rank.
+
+        Returns
+        -------
+        full : ndarray, shape (n_E,) or None
+            On ``root``; ``None`` elsewhere when running in parallel.
+        """
         assert a.ndim == 1, "Can only gather 1D arrays."
         if comm.size == 1:
             return a
@@ -208,13 +323,16 @@ class GridDesc(DistGrid):
         comm.Gatherv([a, a.size, mpitype], [b, counts, displs, mpitype], root)
         return b
 
-    def write(self, a, filename, condition=None):
-        """Write array to file in parallel.
-        
-        Args :
-            a : array aligned along energies.
-            condition : global condition on gloabl energies,
-                e.g. (energies >= 0.) & (energies <= 6.)
+    def write(self, a: np.ndarray, filename: str, condition: Optional[NDArray[np.bool_]] = None) -> None:
+        """Write an orbital-aligned array to one binary file, all ranks at once (MPI-IO).
+
+        Parameters
+        ----------
+        a : ndarray, shape (n_E_local, n, n)
+        filename : str
+        condition : ndarray of bool, shape (n_E,), optional
+            Energies to write, for example
+            ``(energies >= 0.0) & (energies <= 6.0)``. All if omitted.
         """
         assert (
             np.prod(a.shape[1:]) == self._pencil_aligned_orbs.subshape[1]

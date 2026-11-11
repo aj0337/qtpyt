@@ -1,3 +1,10 @@
+r"""Green's function tabulated on an energy grid distributed over MPI ranks."""
+from __future__ import annotations
+
+from typing import Any, Callable, Optional, Sequence
+
+from numpy.typing import NDArray
+
 from functools import lru_cache
 from math import pi
 from typing import TypeVar, Union
@@ -14,12 +21,33 @@ T = TypeVar("T", bound="DistGreenFunction")
 
 
 class DistGreenFunction(LangrethPair):
-    """Distributed green's function"""
+    r"""Green's function of a region evaluated on a whole energy grid.
+
+    The input to the many-body self-energies of :mod:`qtpyt.screening`:
+    :math:`G^r(E)` and :math:`G^<(E)` (or :math:`G^<` and :math:`G^>`) at every
+    grid energy, each MPI rank holding a slice of the energies.
+
+    Parameters
+    ----------
+    gf : GreenFunction or ProjectedGreenFunction
+        Green's function that is evaluated at each energy.
+    energies : ndarray, shape (n_E,)
+        Uniform energy grid, same unit as the Hamiltonian.
+    parent : DistGreenFunction, optional
+        Larger Green's function this one is a projection of; then
+        :meth:`update` updates the parent and projects, see
+        :meth:`take_subspace`.
+
+    Attributes
+    ----------
+    gf0 : GreenFunction
+        The Green's function passed as ``gf``.
+    """
 
     def __init__(
         self,
         gf: Union[ProjectedGreenFunction, GreenFunction],
-        energies,
+        energies: NDArray[np.float64],
         parent: T = None,
     ) -> None:
 
@@ -27,15 +55,15 @@ class DistGreenFunction(LangrethPair):
         self.parent = parent
         super().__init__(energies, gf.H.shape[0], complex)
 
-    def update_from_parent(self, other):
-        """Project from parent.
-        
-        Also update domain and array keys.
-        
-        Args:
-            other : DistGreenFunction
-                green's function defined on a larger
-                domain that contains this.
+    def update_from_parent(self, other: "DistGreenFunction") -> None:
+        """Fill the arrays by projecting those of a larger Green's function.
+
+        Array keys and domain are copied from ``other``.
+
+        Parameters
+        ----------
+        other : DistGreenFunction
+            Green's function of a region that contains this one.
         """
         project = self.gf0.projector.project
         old_k = tuple(self.arrays.keys())
@@ -47,16 +75,17 @@ class DistGreenFunction(LangrethPair):
         self.domain = other.domain
 
     @change_domain("e")
-    def update(self, *, callback=None, lg=True):
-        """Update r and <.
-        
-        Args:
-            callback : callable, optional
-                Called after each iteration, as callback(e, energy)
-                
-            lg : bool, optional
-                Compute the < and > components directly.
-                
+    def update(self, *, callback: Optional[Callable[[int, float], None]] = None, lg: bool = True) -> None:
+        r"""Evaluate :math:`G^r(E)` and :math:`G^<(E)` at every local grid energy.
+
+        Parameters
+        ----------
+        callback : callable, optional
+            Called as ``callback(e, energy)`` before each energy, for
+            progress reports.
+        lg : bool, default True
+            Afterwards replace :math:`G^r` by :math:`G^>`, so the arrays hold
+            :math:`G^<` and :math:`G^>`.
         """
         # Simply project from parent
         if self.parent is not None:
@@ -85,17 +114,25 @@ class DistGreenFunction(LangrethPair):
                 self.convert_retarded()
 
     @assert_domain("e")
-    def convert_retarded(self):
-        """Override the retarded with the greater component."""
+    def convert_retarded(self) -> None:
+        r"""Replace the retarded component by the greater one, :math:`G^> = G^< + G^r - G^a`."""
         greater_from_retarded(self.arrays["r"], self.arrays["l"])
         self.arrays["g"] = self.arrays.pop("r")
 
     @assert_domain("e")
-    def get_density_matrix(self):
-        """Density matrix.
-        
-        Integral of the lesser green's function.
-        This is equivalent to -1/pi Im{Gr}.
+    def get_density_matrix(self) -> NDArray[np.complex128]:
+        r"""Single-particle density matrix, for one spin, from the lesser Green's function.
+
+        .. math::
+
+            D = -\frac{i}{2\pi} \int G^<(E)\,dE,
+
+        integrated with the trapezoidal rule over the energy grid. The grid
+        must cover the occupied spectrum.
+
+        Returns
+        -------
+        D : ndarray, shape (n_orb, n_orb)
         """
         gl = self.arrays["l"]
         # Gl = self.collect_energies(gl)
@@ -104,11 +141,20 @@ class DistGreenFunction(LangrethPair):
         return self.sum_energies(gl, pre=-1.0j / (2 * np.pi))
 
     @assert_domain("e")
-    def get_dos(self, out=None, root=0):
-        """Density of states.
-        
-        Energy resolved DOS computed from
-        the spectral matrix multiplied by the overlap.
+    def get_dos(self, out: Optional[NDArray[np.float64]] = None, root: int = 0) -> NDArray[np.float64]:
+        r"""Density of states on the energy grid, :math:`\operatorname{Tr}[A(E) S]/2\pi` with :math:`A = i(G^> - G^<)`.
+
+        Parameters
+        ----------
+        out : ndarray, optional
+            Array for the local energies.
+        root : int, default 0
+            MPI rank that receives the full grid.
+
+        Returns
+        -------
+        dos : ndarray, shape (n_E,)
+            On rank ``root``; ``None`` on other ranks when running in parallel.
         """
         # g> - g< = gr - ga
         # A = Re[1.j * (gr - ga)]
@@ -122,18 +168,24 @@ class DistGreenFunction(LangrethPair):
             ).real / (2 * np.pi)
         return self.gather_energies(out, root)
 
-    def get_num_electrons(self):
-        """Get total number of electrons."""
+    def get_num_electrons(self) -> float:
+        r"""Number of electrons :math:`2\operatorname{Tr}[DS]`, both spins."""
         D = self.get_density_matrix()
         S = self.gf0.S
         # x2. degenerate spin
         return 2.0 * D.dot(S).real.trace()
 
-    def take_subspace(self, indices):
-        """Build a distributed green's function for a subspace.
-        
-        This instance will be set as the parent so that each call 
-        to the subspace will automatically update this instance's arrays."""
+    def take_subspace(self, indices: Sequence[int]) -> "DistGreenFunction":
+        """Distributed Green's function of a subspace of orbitals, projected from this one.
+
+        This object becomes the parent: updating the subspace updates this
+        Green's function first.
+
+        Parameters
+        ----------
+        indices : sequence of int
+            Orbitals of the subspace, see :class:`~qtpyt.projector.ProjectedGreenFunction`.
+        """
         return DistGreenFunction(
             ProjectedGreenFunction(self.gf0, indices), self.global_energies, parent=self
         )

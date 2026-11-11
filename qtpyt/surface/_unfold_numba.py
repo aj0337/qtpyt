@@ -10,7 +10,7 @@ column.
 block, first fill the upper diagonal entries (including rhe diagonals)
 and then the lower diagonals. 
 
-NOTE that a block toepliz matrix has the form
+A block Toeplitz matrix has the form
 
 A , B , C , D 
 E , A , B , C

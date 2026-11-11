@@ -1,3 +1,16 @@
+r"""Linear solves for Green's-function products (CPU, Intel MKL).
+
+Observables need products such as :math:`G\Gamma G^\dagger` with
+:math:`G = M^{-1}`. These routines factorize :math:`M = zS - H - \Sigma`
+once and apply :math:`M^{-1}` and :math:`(M^\dagger)^{-1}` by triangular
+solves, without forming :math:`G`. The input arrays are overwritten. Requires ``libmkl_rt.so`` at import.
+"""
+from __future__ import annotations
+
+from typing import Tuple
+
+from numpy.typing import NDArray
+
 import numpy as np
 import ctypes
 
@@ -8,7 +21,18 @@ f8 = ctypes.c_double
 c16 = ctypes.c_longdouble
 
 
-def dot(a, b, c, alpha=1.0, beta=0.0):
+def dot(a: NDArray, b: NDArray, c: NDArray, alpha: float = 1.0, beta: float = 0.0) -> NDArray:
+    r"""Real matrix product :math:`C \leftarrow \alpha AB + \beta C` (MKL ``dgemm``).
+
+    Parameters
+    ----------
+    a : ndarray of float64, shape (m, k), C-ordered
+    b : ndarray of float64, shape (k, n), C-ordered
+    c : ndarray of float64, shape (m, n), C-ordered
+        Overwritten with the result.
+    alpha, beta : float
+        Scaling factors.
+    """
 
     Order = i4(101)
     TransA = i4(111)
@@ -46,11 +70,21 @@ def dot(a, b, c, alpha=1.0, beta=0.0):
     return c
 
 
-def solve(a, b, overwrite_b=False):
-    """Solve the equation:   
-        Ax=B
-    
-    Returns: A^(-1)B
+def solve(a: NDArray, b: NDArray, overwrite_b: bool = False) -> NDArray:
+    r"""Solution :math:`X = A^{-1}B` of :math:`AX = B`.
+
+    Parameters
+    ----------
+    a : ndarray, shape (n, n)
+        Matrix :math:`A`, for example :math:`G^{-1}`; overwritten by its LU factors.
+    b : ndarray, shape (n, k)
+        Right-hand side.
+    overwrite_b : bool, default False
+        Write the solution into ``b``.
+
+    Returns
+    -------
+    x : ndarray, shape (n, k)
     """
     Order = i4(102) if a.flags.f_contiguous else i4(101)
 
@@ -72,12 +106,19 @@ def solve(a, b, overwrite_b=False):
     return _b
 
 
-def lrsolve(a, b):
-    """Solve the equation:   
-        Ax=B 
-        A^(H)y=x
+def lrsolve(a: NDArray, b: NDArray) -> NDArray:
+    r"""Product :math:`A^{-1} B (A^\dagger)^{-1}`, for example :math:`G\Gamma G^\dagger` from :math:`G^{-1}` and :math:`\Gamma`.
 
-    Returns: A^(-1)BA^(H)^(-1)
+    Parameters
+    ----------
+    a : ndarray, shape (n, n)
+        Matrix :math:`A`; overwritten.
+    b : ndarray, shape (n, n)
+        Matrix :math:`B`; overwritten.
+
+    Returns
+    -------
+    c : ndarray, shape (n, n)
     """
     Order = i4(102) if a.flags.f_contiguous else i4(101)
 
@@ -109,12 +150,22 @@ def lrsolve(a, b):
     return c
 
 
-def tsolve(a, b, c):
-    """Solve the equation:   
-        Ax=B 
-        A^(H)y=C
+def tsolve(a: NDArray, b: NDArray, c: NDArray) -> Tuple[NDArray, NDArray]:
+    r"""Two solves with one factorization: :math:`A^{-1}B` and :math:`(A^\dagger)^{-1}C`.
 
-    Returns: A^(-1)B, A^(H)^(-1)C
+    Parameters
+    ----------
+    a : ndarray, shape (n, n)
+        Matrix :math:`A`; overwritten by its LU factors.
+    b : ndarray, shape (n, k)
+        Overwritten by :math:`A^{-1}B`.
+    c : ndarray, shape (n, l)
+        Overwritten by :math:`(A^\dagger)^{-1}C`.
+
+    Returns
+    -------
+    x, y : ndarray
+        :math:`A^{-1}B` and :math:`(A^\dagger)^{-1}C`.
     """
     Order = i4(102) if a.flags.f_contiguous else i4(101)
 

@@ -1,3 +1,4 @@
+"""Low-level kernels for the Green's-function solvers, CPU or GPU depending on ``qtpyt.xp``."""
 from qtpyt import xp
 
 if xp.__name__ == "numpy":

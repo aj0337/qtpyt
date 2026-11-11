@@ -1,4 +1,17 @@
+r"""k-point grids, time-reversal symmetry and Bloch sums for periodic electrodes.
+
+k-points are in units of the reciprocal lattice vectors and lattice vectors
+in units of the direct lattice vectors. The Fourier convention is that of
+:mod:`qtpyt.tightbinding`. Time-reversal symmetry is used in the form
+:math:`A(-\mathbf k) = A(\mathbf k)^T`, valid for Hermitian matrices in a basis
+of real orbitals without spin–orbit coupling.
+"""
+from __future__ import annotations
+
 from functools import partial
+from typing import List, Optional, Sequence, Tuple
+
+from numpy.typing import NDArray
 
 import numpy as np
 from ase.dft.kpoints import get_monkhorst_pack_size_and_offset
@@ -6,8 +19,22 @@ from numba import njit
 from scipy.spatial.distance import cdist
 
 
-def monkhorst_pack(size, offset=(0.0, 0.0, 0.0)):
-    """K-points from Monkhorst-Pack."""
+def monkhorst_pack(size: Sequence[int], offset: Sequence[float] = (0.0, 0.0, 0.0)) -> NDArray[np.float64]:
+    r"""Monkhorst–Pack grid of k-points.
+
+    Parameters
+    ----------
+    size : sequence of three int
+        Number of k-points along each reciprocal lattice vector.
+    offset : sequence of three float, default (0, 0, 0)
+        Shift of the grid, in units of the reciprocal lattice vectors.
+
+    Returns
+    -------
+    kpts : ndarray, shape (prod(size), 3)
+        The grid points :math:`(i + 1/2)/N - 1/2 + \mathrm{offset}`, so an odd
+        ``size`` contains Γ and an even one does not.
+    """
     kpts = np.indices(size).reshape(len(size), -1).T
     kpts = (kpts + 0.5) / size - 0.5 + offset
     return kpts
@@ -33,16 +60,29 @@ def _index(array, item):
             return idx
 
 
-def map_ik2k(kpts, k2ik):
-    """Get mapping from irreducible (ikpts) to reducible k-points (kpts).
-    
-    Args:
-        kpts : (np.ndarray) k-points
-        k2ik : map from kpts to ikpts such that kpts[k2ik] = ikpts
+def map_ik2k(kpts: NDArray[np.float64], k2ik: NDArray[np.int_]) -> Tuple[NDArray[np.int_], NDArray[np.bool_]]:
+    r"""For every k-point of the full grid, the irreducible k-point it is obtained from.
 
-    Returns:
-        ik2k : map from ikpts to kpts.
-        time_reversal : whether item of map must be time-reversed.    
+    Parameters
+    ----------
+    kpts : ndarray, shape (n_k, 3)
+        Full k-point grid.
+    k2ik : ndarray of int
+        Positions in ``kpts`` of the irreducible k-points,
+        ``kpts[k2ik] = ikpts``.
+
+    Returns
+    -------
+    ik2k : ndarray of int, shape (n_k,)
+        Index into the irreducible k-points for each k-point.
+    time_reverse : ndarray of bool, shape (n_k,)
+        True where the k-point is the time-reversed partner
+        :math:`-\mathbf k` of its irreducible k-point.
+
+    Raises
+    ------
+    IndexError
+        If a k-point has no time-reversed partner in the irreducible set.
     """
     # Find if there's a minimum distance with time-reversed k-point.
     # distances = cdist(kpts, np.dot(kpts, -np.eye(3).T)) % 1
@@ -62,26 +102,31 @@ def map_ik2k(kpts, k2ik):
     return ik2k, time_reverse
 
 
-def apply_inversion_symm(kpts, direction="x"):
-    """Reduce inversion (time reversal) symmetry along direction.
-    
-    Args:
-        kpts : (np.ndarray) k-points
-        direction : time-reverse direction
+def apply_inversion_symm(kpts: NDArray[np.float64], direction: str = "x") -> Tuple[NDArray[np.float64], NDArray[np.int_], NDArray[np.int_], NDArray[np.bool_]]:
+    r"""Irreducible k-points under time reversal :math:`\mathbf k \to -\mathbf k`.
 
-    Returns:
-        ikpts : (np.ndarray) irreducible k-points
-        k2ik : mapping from kpts to ikpts, i.e. kpts[k2ik] = ikpts
-        ik2k : map from ikpts to kpts.
-        time_reversal : whether item of map must be time-reversed.
-    
-    Example:
-        kpts = monkhorst-pack(size)
-        ikpts, k2ik, ik2k, time_reverse = apply_inversion_symm(kpts)
-        A :: k-matrix at ikpts
-        B :: k-matrix at kpts
-        B = A[ik2k]
-        B[time_reverse] = np.transpose(B[time_reverse],axes=(0,2,1))
+    Of each pair :math:`(\mathbf k, -\mathbf k)` one point is kept: for
+    ``direction='x'``, the one whose first non-zero component is positive.
+    Γ is always kept. Matrices on the full grid then follow from those on
+    the irreducible points as ``B = A[ik2k]`` with ``B[time_reverse]``
+    transposed.
+
+    Parameters
+    ----------
+    kpts : ndarray, shape (n_k, 3)
+        Full k-point grid.
+    direction : {'x', 'y', 'z'}, default 'x'
+        Selects which non-zero component (first, second or third) decides
+        which point of a pair is kept.
+
+    Returns
+    -------
+    ikpts : ndarray, shape (n_ik, 3)
+        Irreducible k-points.
+    k2ik : ndarray of int
+        Positions of ``ikpts`` in ``kpts``.
+    ik2k, time_reverse : ndarray
+        See :func:`map_ik2k`.
     """
     p_dir = "xyz".index(direction)
     ikpts = []
@@ -103,17 +148,26 @@ def apply_inversion_symm(kpts, direction="x"):
     return ikpts, k2ik, ik2k, time_reverse
 
 
-def expand_inversion_symm(kpts, A, direction="x"):
-    """Expand the k-matrices A to the full-BZ.
+def expand_inversion_symm(kpts: NDArray[np.float64], A: NDArray, direction: str = "x") -> Tuple[NDArray[np.float64], NDArray]:
+    r"""Matrices on the full k-grid from matrices on its irreducible part.
 
-    Given the (ir)redicible k-points `kpts` and the matrices
-    A evaluated at the (ir)redicible k-points, expand A
-    to the full-BZ.
+    Uses :math:`A(-\mathbf k) = A(\mathbf k)^T`.
 
-    Args:
-        kpts : (np.ndarray) k-points
-        direction : time-reverse direction
-        A :  matrices in k-space.
+    Parameters
+    ----------
+    kpts : ndarray, shape (n_k, 3)
+        Full k-point grid.
+    A : ndarray, shape (n_ik, n, n)
+        Matrices at the irreducible k-points of :func:`apply_inversion_symm`.
+    direction : {'x', 'y', 'z'}, default 'x'
+        As in :func:`apply_inversion_symm`.
+
+    Returns
+    -------
+    kpts : ndarray, shape (n_k, 3)
+        k-point of each returned matrix.
+    B : ndarray, shape (n_k, n, n)
+        Matrices on the full grid.
     """
     assert A.shape[0] < kpts.shape[0], "A already in reducible BZ"
     ikpts, k2ik, ik2k, time_reverse = apply_inversion_symm(kpts, direction)
@@ -124,16 +178,22 @@ def expand_inversion_symm(kpts, A, direction="x"):
     return kpts, B
 
 
-def build_partial_kpts(size, offset=(0.0, 0.0, 0.0), direction="x"):
-    """Build parallel and transverse k-points. 
-    
-    Args:
-        size, offset : Monkhorst-Pack.
-        direction : parallel direction.
+def build_partial_kpts(size: Sequence[int], offset: Sequence[float] = (0.0, 0.0, 0.0), direction: str = "x") -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Split a Monkhorst–Pack grid into its transport and transverse parts.
 
-    Returns:
-        kpts_p : parallel k-points
-        kpts_t : transverse k-points 
+    Parameters
+    ----------
+    size, offset
+        Grid, see :func:`monkhorst_pack`.
+    direction : {'x', 'y', 'z'}, default 'x'
+        Transport direction.
+
+    Returns
+    -------
+    kpts_p : ndarray
+        k-points along the transport direction only.
+    kpts_t : ndarray
+        k-points in the transverse plane only.
     """
     size = np.asarray(size)
     offset = np.asarray(offset)
@@ -157,14 +217,29 @@ def build_partial_kpts(size, offset=(0.0, 0.0, 0.0), direction="x"):
     return kpts_p, kpts_t
 
 
-def fourier_sum(A, kpts, R, out=None, inverse=False):
-    """K-space Fourier sum.
-    
-    Args:
-        A : (np.ndarray) matrices in k-space.
-        kpts : (1D or 2D) k-points at which A's have been (will be) evaluated.
-        R : (1D or 2D) lattice vectors at which A's will be (have been) evaluated.
-        inverse : compute inverse fourier transform
+def fourier_sum(A: NDArray, kpts: NDArray[np.float64], R: NDArray, out: Optional[NDArray] = None, inverse: bool = False) -> NDArray:
+    r"""Fourier transform between k-space matrices and real-space lattice matrices.
+
+    Parameters
+    ----------
+    A : ndarray, shape (n_k, n, m) or (n_R, n, m)
+        Matrices at the k-points (forward) or at the lattice vectors
+        (``inverse``).
+    kpts : ndarray, shape (3,) or (n_k, 3)
+        k-points.
+    R : ndarray, shape (3,) or (n_R, 3)
+        Lattice vectors.
+    out : ndarray, optional
+        Array for the result.
+    inverse : bool, default False
+        Go from real space to k-space instead.
+
+    Returns
+    -------
+    B : ndarray
+        Forward: :math:`A(\mathbf R) = N_k^{-1}\sum_{\mathbf k} A(\mathbf k)\,e^{2\pi i\mathbf k\cdot\mathbf R}`.
+        Inverse: :math:`A(\mathbf k) = \sum_{\mathbf R} A(\mathbf R)\,e^{-2\pi i\mathbf k\cdot\mathbf R}`.
+        The first axis is dropped when ``R`` is a single vector.
     """
     # np.asarray avoids copy
     kpts = np.asarray(kpts)
@@ -196,15 +271,32 @@ def fourier_sum(A, kpts, R, out=None, inverse=False):
     return out
 
 
-def partial_bloch_sum(A, kpts, R, kpts_p, kpts_t, out=None):
-    """Partial Bloch sum along parallel direction.
+def partial_bloch_sum(A: NDArray, kpts: NDArray[np.float64], R: NDArray, kpts_p: NDArray[np.float64], kpts_t: NDArray[np.float64], out: Optional[NDArray] = None) -> NDArray:
+    r"""Fourier transform along the transport direction only, at each transverse k-point.
 
-    Args:
-        A : (np.ndarray) matrices in k-space.
-        kpts : (2D) k-points at which A's have been evaluated.
-        R : (1D or 2D) lattice vectors at which A's will be transformed.
-        kpts_p : parallel k-points
-        kpts_t : transverse k-points
+    Gives the principal-layer matrices :math:`A_{\mathbf k_\perp}(R_\parallel)`:
+    real space along transport, Bloch momentum across. These are the inputs
+    of :class:`~qtpyt.surface.principallayer.PrincipalLayer`.
+
+    Parameters
+    ----------
+    A : ndarray, shape (n_k, n, n)
+        Matrices on the 3D grid, or on its irreducible part (then
+        :math:`A(-\mathbf k) = A(\mathbf k)^T` fills the rest).
+    kpts : ndarray, shape (n_k, 3)
+        k-points of ``A``.
+    R : ndarray, shape (3,) or (n_R, 3)
+        Lattice vectors along the transport direction.
+    kpts_p, kpts_t : ndarray
+        Transport and transverse parts of the grid, from
+        :func:`build_partial_kpts`.
+    out : ndarray, optional
+        Array for the result.
+
+    Returns
+    -------
+    A_tR : ndarray, shape (n_kt, n_R, n, n) or (n_kt, n, n)
+        One set of real-space matrices per transverse k-point.
     """
     distance = partial(np.linalg.norm, axis=1)
 
@@ -235,25 +327,36 @@ def partial_bloch_sum(A, kpts, R, kpts_p, kpts_t, out=None):
     return out
 
 
-def build_lattice_vectors(size):
-    """Lattice vectors in scaled coordinates."""
+def build_lattice_vectors(size: Sequence[int]) -> NDArray[np.int_]:
+    r"""Integer lattice vectors :math:`(i, j, k)` with :math:`0 \le i < N_1` and so on.
+
+    Parameters
+    ----------
+    size : sequence of three int
+    """
     return np.indices(size).reshape(len(size), -1).T
 
 
-def unfold_kpts(Kpts, kpts):
-    """Unfold coarse mesh Kpts into fine mesh kpoints 
-    sampled with Monkhorst-Pack mesh kpts_size.
+def unfold_kpts(Kpts: NDArray[np.float64], kpts: NDArray[np.float64]) -> List[List[int]]:
+    """Fine-grid k-points that fold onto each k-point of a coarse grid.
 
-    Args:
-        Kpts : (np.ndarray, ndimn=2)
-            The coarse sampled k-points.
-        kpts : (np.ndarray, ndimn=2)
-            The fine sampled k-points
-        kpts_size : the size of the fine kpts mesh.
+    A supercell :math:`N` times larger than the primitive cell has a
+    Brillouin zone :math:`N` times smaller; each of its k-points :math:`K`
+    collects :math:`N` k-points of the primitive cell. This finds them.
 
-    Returns:
-        k_groups : The groups of kpoints indices that must be
-            unfolded to fold into Kpts.
+    Parameters
+    ----------
+    Kpts : ndarray, shape (n_K, 3)
+        Coarse grid, of the supercell.
+    kpts : ndarray, shape (n_k, 3)
+        Fine grid, of the primitive cell. Its size must be a multiple of
+        that of ``Kpts`` along each direction.
+
+    Returns
+    -------
+    k_groups : list of list of int
+        ``k_groups[K]`` holds the indices into ``kpts`` that fold onto
+        ``Kpts[K]``.
     """
     distance = partial(np.linalg.norm, axis=1)
     Ksize, Koffset = get_monkhorst_pack_size_and_offset(Kpts)

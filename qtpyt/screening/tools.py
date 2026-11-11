@@ -1,3 +1,10 @@
+r"""Occupations, Langreth identities and energy-grid utilities for the many-body module."""
+from __future__ import annotations
+
+from typing import Callable, Optional, Tuple, Union
+
+from numpy.typing import NDArray
+
 import numpy as np
 from numba import njit, prange
 from scipy.constants import e, k
@@ -7,7 +14,26 @@ from scipy.linalg.blas import get_blas_funcs
 kB = k / e  # Boltzmann in eV.
 
 
-def fermidistribution(energy, kt):
+def fermidistribution(energy: Union[float, NDArray[np.float64]], kt: float) -> Union[float, NDArray[np.float64]]:
+    r"""Fermi–Dirac occupation :math:`f(x) = 1/(1 + e^{x/k_BT})` of an energy measured from the chemical potential.
+
+    Parameters
+    ----------
+    energy : float or ndarray
+        :math:`x = E - \mu`, same unit as ``kt``.
+    kt : float
+        Thermal energy :math:`k_B T`, non-negative. At zero the result is a
+        step equal to 1 for :math:`x \le 0`.
+
+    Returns
+    -------
+    f : float or ndarray
+
+    Raises
+    ------
+    AssertionError
+        If ``kt`` is negative.
+    """
     # fermi level is fixed to zero
     # energy can be a single number or a list
     assert kt >= 0.0, "Negative temperature encountered!"
@@ -22,7 +48,16 @@ def fermidistribution(energy, kt):
 
 
 @njit("(c16[:,:,::1],c16[:,:,::1])", parallel=True, fastmath=True)
-def lesser_from_retarded(r, g):
+def lesser_from_retarded(r: NDArray[np.complex128], g: NDArray[np.complex128]) -> None:
+    r"""Overwrite :math:`X^r` with :math:`X^< = X^> - X^r + X^a` at every energy.
+
+    Parameters
+    ----------
+    r : ndarray of complex128, shape (n_E, n, n)
+        Retarded component, overwritten with the lesser one.
+    g : ndarray of complex128, shape (n_E, n, n)
+        Greater component.
+    """
     # < = > - r + a
     ne, n = r.shape[:2]
     for e in prange(ne):
@@ -42,7 +77,16 @@ def lesser_from_retarded(r, g):
 
 
 @njit("(c16[:,:,::1],c16[:,:,::1])", parallel=True, fastmath=True)
-def greater_from_retarded(r, l):
+def greater_from_retarded(r: NDArray[np.complex128], l: NDArray[np.complex128]) -> None:
+    r"""Overwrite :math:`X^r` with :math:`X^> = X^< + X^r - X^a` at every energy.
+
+    Parameters
+    ----------
+    r : ndarray of complex128, shape (n_E, n, n)
+        Retarded component, overwritten with the greater one.
+    l : ndarray of complex128, shape (n_E, n, n)
+        Lesser component.
+    """
     # > = < + r - a
     ne, n = r.shape[:2]
     for e in prange(ne):
@@ -61,8 +105,14 @@ def greater_from_retarded(r, l):
                 r[e, i, j] = l[e, i, j] + r[e, i, j] - a[j, i]
 
 
-def translate_along_axis(array, translation):
-    """Optimized method for translating along axis 0"""
+def translate_along_axis(array: NDArray, translation: int) -> NDArray:
+    """Copy of ``array`` cyclically shifted by ``translation`` along the first axis.
+
+    Parameters
+    ----------
+    array : ndarray
+    translation : int
+    """
     newarray = array.copy()
     if translation == 0:
         return newarray
@@ -71,8 +121,17 @@ def translate_along_axis(array, translation):
     return newarray
 
 
-def roll(a, shift):
-    """Translate and array in place."""
+def roll(a: NDArray, shift: int) -> NDArray:
+    """Cyclic shift of ``a`` along the first axis, in place, as :func:`numpy.roll`.
+
+    Used to move :math:`t = 0` (or :math:`E = 0`) to the first grid point
+    before a Fourier transform.
+
+    Parameters
+    ----------
+    a : ndarray
+    shift : int
+    """
     n = a.shape[0]
     shift = shift % n
     perm = np.roll(np.arange(n), shift)
@@ -92,7 +151,19 @@ def roll(a, shift):
     return a
 
 
-def rotate(a, u, work=None, out=None, overwrite_a=False):
+def rotate(a: NDArray, u: NDArray, work: Optional[NDArray] = None, out: Optional[NDArray] = None, overwrite_a: bool = False) -> NDArray:
+    r"""Product :math:`U A U^\dagger`, for example :math:`W^r P^> W^a`.
+
+    Parameters
+    ----------
+    a, u : ndarray, shape (n, n)
+    work : ndarray, optional
+        Scratch array.
+    out : ndarray, optional
+        Array for the result.
+    overwrite_a : bool, default False
+        Write the result into ``a``.
+    """
 
     gemm = get_blas_funcs("gemm", (a, u))
     if work is None:
@@ -107,8 +178,13 @@ def rotate(a, u, work=None, out=None, overwrite_a=False):
     return out
 
 
-def increase2pow2(N):
-    """Increase number to power of two.s"""
+def increase2pow2(N: int) -> int:
+    """Smallest power of two not below ``N``, the length used for zero-padded FFTs.
+
+    Parameters
+    ----------
+    N : int
+    """
     count = 0
     while N != 1:
         if N % 2 == 1:
@@ -118,7 +194,16 @@ def increase2pow2(N):
     return 2 ** count
 
 
-def get_extended_energies(energies, oversample=10):
+def get_extended_energies(energies: NDArray[np.float64], oversample: int = 10) -> NDArray[np.float64]:
+    """Energy grid with the same start and spacing, extended to a power-of-two length.
+
+    Parameters
+    ----------
+    energies : ndarray, shape (n_E,)
+        Uniform grid.
+    oversample : int, default 10
+        The new length is the next power of two above ``oversample * n_E``.
+    """
     ne = len(energies)
 
     # Make sure that grid lenght is a power of 2
@@ -131,16 +216,16 @@ def get_extended_energies(energies, oversample=10):
     return np.around(extenergies, 8)
 
 
-def interpolate(X, energies, indx2eval):
-    """Interpolate array inplace at `indx2eval` energies along the 0-th axis.
-    
-    X.shape[0] and len(energies) are the same. The rest of the indices are
-    assumed to be the energy points at which X has been evaluated.
-    
-    Example:
-        X = func(energies[indx])
-        interpolate(X, energies, np.setdiff1d(range(energies.size), indx))
-    
+def interpolate(X: NDArray, energies: NDArray[np.float64], indx2eval: NDArray[np.int_]) -> None:
+    """Fill grid points that were skipped by linear interpolation from the computed ones, in place.
+
+    Parameters
+    ----------
+    X : ndarray, shape (n_E, ...)
+        Values on the grid; entries at ``indx2eval`` are overwritten.
+    energies : ndarray, shape (n_E,)
+    indx2eval : ndarray of int
+        Grid indices to fill. All other indices must hold computed values.
     """
     assert X.shape[0] == len(energies), "X.shape[0] differs from len(energies)."
     indx = np.setdiff1d(range(len(energies)), indx2eval)
@@ -149,7 +234,16 @@ def interpolate(X, energies, indx2eval):
         X[e] = X_interp(energy)
 
 
-def get_interp_indices(energies):
+def get_interp_indices(energies: NDArray[np.float64]) -> NDArray[np.int_]:
+    """Grid indices for a sparse sampling that is dense near zero energy and coarse far from it.
+
+    The step between kept indices grows quadratically with the distance
+    from zero, scaled by a tenth of the grid ends.
+
+    Parameters
+    ----------
+    energies : ndarray, shape (n_E,)
+    """
     a = 2
     b = energies[0] / 10.0
     c = energies[-1] / 10.0
@@ -166,7 +260,20 @@ def get_interp_indices(energies):
     return np.array(indices)
 
 
-def linear_interp(a1, indices, size):
+def linear_interp(a1: NDArray, indices: NDArray[np.int_], size: int) -> NDArray:
+    """Values on a full grid from values at selected indices, by linear interpolation.
+
+    Points outside the selected range are extrapolated linearly.
+
+    Parameters
+    ----------
+    a1 : ndarray, shape (len(indices), ...)
+        Values at ``indices``.
+    indices : ndarray of int
+        Increasing grid indices.
+    size : int
+        Length of the full grid.
+    """
     # Interpolate from array a1 to array a2. a1 is sampled on indices
     # Treat first index as special case
 
@@ -189,22 +296,24 @@ def linear_interp(a1, indices, size):
     return a2
 
 
-def finer(x, A, oversample=2):
-    """Increase number of samples for matrix A.
+def finer(x: NDArray[np.float64], A: NDArray, oversample: float = 2) -> Tuple[NDArray[np.float64], NDArray]:
+    """Matrices on a grid ``oversample`` times finer, by cubic interpolation.
 
     Parameters
     ----------
-    x : 1D array_like
-        grid points
-    A : 3D array_like
-        1D array of 2D matries for each `x`-th point.
-    oversample : int, optional
-        decrease grid spacing by `n`, by default 2
+    x : ndarray, shape (n,)
+        Uniform grid.
+    A : ndarray, shape (n, m, m)
+        A matrix at each grid point.
+    oversample : float, default 2
+        Ratio of old to new grid spacing.
 
     Returns
     -------
-    3D array_like
-        matrix array at finer grid points.
+    x2 : ndarray
+        The finer grid.
+    A2 : ndarray
+        Matrices on it.
     """
     dx = x[1] - x[0]
     dx /= oversample
@@ -213,13 +322,26 @@ def finer(x, A, oversample=2):
     return x2, A2
 
 
-def smooth(x, A, cutfreq=10.0, oversample=2):
-    """Helper function to interpolate interacting self-energy.
+def smooth(x: NDArray[np.float64], A: NDArray, cutfreq: float = 10.0, oversample: float = 2) -> NDArray:
+    """Remove fast oscillations from a function of energy, such as a self-energy on a coarse grid.
 
-    Example usage:
-        sigma_interp = smooth(energies, sigma)
-        sigma0 = sigma_interp(0.).real
+    The function is interpolated to a finer grid, Fourier components above
+    the highest frequency divided by ``cutfreq`` are discarded, and the
+    result is brought back to the original grid.
 
+    Parameters
+    ----------
+    x : ndarray, shape (n,)
+        Uniform energy grid.
+    A : ndarray, shape (n, m, m)
+    cutfreq : float, default 10.0
+        Keep frequencies up to the maximum divided by this number.
+    oversample : float, default 2
+        Refinement before filtering, see :func:`finer`.
+
+    Returns
+    -------
+    A : ndarray, shape (n, m, m)
     """
     #
     if oversample != 1:
