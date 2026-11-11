@@ -96,7 +96,8 @@ def check_node(node, src, path, report, in_class):
         report(where, f"development history '{m.group(0)}': describe current behaviour only")
 
     raw = ast.get_source_segment(src, node.body[0].value) or ""
-    if "\\" in doc and not raw.lstrip()[:1] in ("r", "R"):
+    # Check the source, not the parsed text: "\v" in "\varepsilon" is a valid escape and vanishes from it.
+    if "\\" in raw and not raw.lstrip()[:1] in ("r", "R"):
         report(where, "docstring contains backslashes but is not a raw string (use r\"\"\")")
 
     if isinstance(node, ast.ClassDef):

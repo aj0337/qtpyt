@@ -19,3 +19,8 @@ build
 dist
 *.lua
 *.c
+
+# Sphinx docs
+!docs/requirements.txt
+docs/_build/
+docs/generated/
